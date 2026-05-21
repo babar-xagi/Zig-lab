@@ -13,36 +13,51 @@ pub const RunOptions = struct {
     selected_cell: ?[]const u8 = null,
 };
 
+const LineMap = struct {
+    cell: ?notebook.Cell = null,
+    cell_line: usize = 0,
+    column_offset: usize = 0,
+};
+
+const GeneratedSource = struct {
+    source: []u8,
+    line_maps: []LineMap,
+
+    fn deinit(self: *GeneratedSource, gpa: std.mem.Allocator) void {
+        gpa.free(self.source);
+        gpa.free(self.line_maps);
+        self.* = undefined;
+    }
+};
+
 pub const Runner = struct {
     gpa: std.mem.Allocator,
     io: Io,
-    globals: std.ArrayList(u8) = .empty,
+    prepared_cells: std.ArrayList(notebook.Cell) = .empty,
 
     pub fn deinit(self: *Runner) void {
-        self.globals.deinit(self.gpa);
+        self.prepared_cells.deinit(self.gpa);
     }
 
     pub fn runNotebook(self: *Runner, nb: notebook.Notebook, options: RunOptions) !void {
         try Io.Dir.cwd().createDirPath(self.io, GeneratedDir);
 
         if (options.selected_cell) |wanted| {
-            var found = false;
-            for (nb.cells) |cell| {
-                if (cell.kind != .zig) continue;
-
-                if (cell.id != null and std.mem.eql(u8, cell.id.?, wanted)) {
-                    found = true;
-                    try self.executeCell(nb, cell, .visible);
-                    break;
-                }
-
-                try self.preparePreviousDeclaration(cell);
-            }
-
-            if (!found) {
+            const selected = nb.findCell(wanted) orelse {
                 try cli_io.printErr(self.gpa, self.io, "cell not found: {s}\n", .{wanted});
                 return error.CellNotFound;
+            };
+
+            if (selected.kind != .zig) {
+                try cli_io.printErr(self.gpa, self.io, "cell is not executable Zig: {s}\n", .{wanted});
+                return error.CellNotExecutable;
             }
+
+            if (selected.depends_on.len == 0) {
+                try self.preparePreviousDeclarationsBefore(nb, selected);
+            }
+
+            try self.executeCell(nb, selected, .visible);
             return;
         }
 
@@ -57,9 +72,30 @@ pub const Runner = struct {
 
     pub fn checkNotebook(self: *Runner, nb: notebook.Notebook) !void {
         try cli_io.print(self.gpa, self.io, "Notebook OK\n\n", .{});
-        try cli_io.print(self.gpa, self.io, "Cells:    {d}\n", .{nb.cells.len});
-        try cli_io.print(self.gpa, self.io, "Markdown: {d}\n", .{nb.countKind(.markdown)});
-        try cli_io.print(self.gpa, self.io, "Zig:      {d}\n", .{nb.countKind(.zig)});
+        try cli_io.print(self.gpa, self.io, "Cells:        {d}\n", .{nb.cells.len});
+        try cli_io.print(self.gpa, self.io, "Markdown:     {d}\n", .{nb.countKind(.markdown)});
+        try cli_io.print(self.gpa, self.io, "Zig:          {d}\n", .{nb.countKind(.zig)});
+
+        var dependency_count: usize = 0;
+        var has_dependency_error = false;
+        for (nb.cells) |cell| {
+            dependency_count += cell.depends_on.len;
+            for (cell.depends_on) |dep| {
+                const dep_cell = nb.findCell(dep) orelse {
+                    has_dependency_error = true;
+                    try cli_io.printErr(self.gpa, self.io, "missing dependency for cell {s}: {s}\n", .{ cell.displayName(), dep });
+                    continue;
+                };
+
+                if (dep_cell.kind != .zig or isRunnableCell(dep_cell)) {
+                    has_dependency_error = true;
+                    try cli_io.printErr(self.gpa, self.io, "dependency must be a Zig declaration cell: {s} -> {s}\n", .{ cell.displayName(), dep });
+                }
+            }
+        }
+
+        try cli_io.print(self.gpa, self.io, "Dependencies: {d}\n", .{dependency_count});
+        if (has_dependency_error) return error.InvalidNotebook;
     }
 
     pub fn exportNotebook(self: *Runner, nb: notebook.Notebook, out_path: ?[]const u8) !void {
@@ -124,78 +160,42 @@ pub const Runner = struct {
         }
     }
 
-    fn preparePreviousDeclaration(self: *Runner, cell: notebook.Cell) !void {
-        if (isTestCell(cell.source)) return;
+    fn executeCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
+        try self.prepareDependencies(nb, cell);
 
-        const source = try self.buildDeclarationSource(cell.source);
-        defer self.gpa.free(source);
-
-        const path = try self.writeGeneratedSource(cell.index, "decl", source);
-        defer self.gpa.free(path);
-
-        var result = try self.runCommand(&.{ "zig", "build-exe", path, "-fno-emit-bin" });
-        defer result.deinit(self.gpa);
-
-        if (result.succeeded()) {
-            try self.addGlobal(cell.source);
+        if (isTestCell(cell.source)) {
+            try self.executeTestCell(nb, cell, visibility);
+        } else if (containsLikelyStatement(cell.source)) {
+            try self.executeRunCell(nb, cell, visibility);
+        } else {
+            try self.prepareDeclarationCell(nb, cell, visibility);
         }
     }
 
-    fn executeCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
-        if (isTestCell(cell.source)) {
-            try self.executeTestCell(nb, cell, visibility);
-            return;
-        }
+    fn executeRunCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
+        var generated = try self.buildRunSource(cell);
+        defer generated.deinit(self.gpa);
 
-        const declaration_source = try self.buildDeclarationSource(cell.source);
-        defer self.gpa.free(declaration_source);
+        const path = try self.writeGeneratedSource(cell.index, "run", generated.source);
+        defer self.gpa.free(path);
 
-        const declaration_path = try self.writeGeneratedSource(cell.index, "decl", declaration_source);
-        defer self.gpa.free(declaration_path);
-
-        var declaration_result = try self.runCommand(&.{ "zig", "build-exe", declaration_path, "-fno-emit-bin" });
-        defer declaration_result.deinit(self.gpa);
-
-        if (declaration_result.succeeded()) {
-            try self.addGlobal(cell.source);
-            if (visibility == .visible) {
-                try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: ready\n", .{ cell.index + 1, nb.cells.len, cell.displayName() });
-                try writeCommandOutput(self, declaration_result);
-            }
-            return;
-        }
-
-        if (!containsLikelyStatement(cell.source)) {
-            if (visibility == .visible) {
-                try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: failed\n", .{ cell.index + 1, nb.cells.len, cell.displayName() });
-                try writeCommandOutput(self, declaration_result);
-            }
-            return error.CellFailed;
-        }
-
-        const run_source = try self.buildRunSource(cell.source);
-        defer self.gpa.free(run_source);
-
-        const run_path = try self.writeGeneratedSource(cell.index, "run", run_source);
-        defer self.gpa.free(run_path);
-
-        var run_result = try self.runCommand(&.{ "zig", "run", run_path });
-        defer run_result.deinit(self.gpa);
+        var result = try self.runCommand(&.{ "zig", "run", path });
+        defer result.deinit(self.gpa);
 
         if (visibility == .visible) {
-            const status: []const u8 = if (run_result.succeeded()) "ran" else "failed";
+            const status: []const u8 = if (result.succeeded()) "ran" else "failed";
             try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: {s}\n", .{ cell.index + 1, nb.cells.len, cell.displayName(), status });
-            try writeCommandOutput(self, run_result);
+            try self.writeCommandOutput(nb, result, path, generated.line_maps);
         }
 
-        if (!run_result.succeeded()) return error.CellFailed;
+        if (!result.succeeded()) return error.CellFailed;
     }
 
     fn executeTestCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
-        const source = try self.buildTestSource(cell.source);
-        defer self.gpa.free(source);
+        var generated = try self.buildTestSource(cell);
+        defer generated.deinit(self.gpa);
 
-        const path = try self.writeGeneratedSource(cell.index, "test", source);
+        const path = try self.writeGeneratedSource(cell.index, "test", generated.source);
         defer self.gpa.free(path);
 
         var result = try self.runCommand(&.{ "zig", "test", path });
@@ -204,7 +204,7 @@ pub const Runner = struct {
         if (visibility == .visible) {
             const status: []const u8 = if (result.succeeded()) "passed" else "failed";
             try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: test {s}\n", .{ cell.index + 1, nb.cells.len, cell.displayName(), status });
-            try writeCommandOutput(self, result);
+            try self.writeCommandOutput(nb, result, path, generated.line_maps);
             if (result.succeeded() and result.stdout.len == 0 and result.stderr.len == 0) {
                 try cli_io.print(self.gpa, self.io, "All tests passed.\n", .{});
             }
@@ -213,48 +213,157 @@ pub const Runner = struct {
         if (!result.succeeded()) return error.CellFailed;
     }
 
-    fn buildDeclarationSource(self: *Runner, source: []const u8) ![]u8 {
+    fn preparePreviousDeclarationsBefore(self: *Runner, nb: notebook.Notebook, target: notebook.Cell) !void {
+        for (nb.cells) |cell| {
+            if (cell.index >= target.index) break;
+            if (cell.kind != .zig) continue;
+            if (isRunnableCell(cell)) continue;
+
+            try self.prepareDependencies(nb, cell);
+            try self.prepareDeclarationCell(nb, cell, .silent);
+        }
+    }
+
+    fn prepareDependencies(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell) !void {
+        var visiting: std.ArrayList(usize) = .empty;
+        defer visiting.deinit(self.gpa);
+
+        try self.prepareDependenciesInternal(nb, cell, &visiting);
+    }
+
+    fn prepareDependenciesInternal(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visiting: *std.ArrayList(usize)) !void {
+        for (cell.depends_on) |dep| {
+            const dep_cell = nb.findCell(dep) orelse {
+                try cli_io.printErr(self.gpa, self.io, "missing dependency for cell {s}: {s}\n", .{ cell.displayName(), dep });
+                return error.DependencyNotFound;
+            };
+
+            if (dep_cell.kind != .zig or isRunnableCell(dep_cell)) {
+                try cli_io.printErr(self.gpa, self.io, "dependency must be a Zig declaration cell: {s} -> {s}\n", .{ cell.displayName(), dep });
+                return error.DependencyNotDeclaration;
+            }
+
+            if (self.isPrepared(dep_cell)) continue;
+
+            for (visiting.items) |index| {
+                if (index == dep_cell.index) {
+                    try cli_io.printErr(self.gpa, self.io, "dependency cycle includes cell: {s}\n", .{dep_cell.displayName()});
+                    return error.DependencyCycle;
+                }
+            }
+
+            try visiting.append(self.gpa, dep_cell.index);
+            defer _ = visiting.pop();
+
+            try self.prepareDependenciesInternal(nb, dep_cell, visiting);
+            try self.prepareDeclarationCell(nb, dep_cell, .silent);
+        }
+    }
+
+    fn prepareDeclarationCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
+        if (self.isPrepared(cell)) {
+            if (visibility == .visible) {
+                try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: ready (cached)\n", .{ cell.index + 1, nb.cells.len, cell.displayName() });
+            }
+            return;
+        }
+
+        var generated = try self.buildDeclarationSource(cell);
+        defer generated.deinit(self.gpa);
+
+        const path = try self.writeGeneratedSource(cell.index, "decl", generated.source);
+        defer self.gpa.free(path);
+
+        var result = try self.runCommand(&.{ "zig", "build-exe", path, "-fno-emit-bin" });
+        defer result.deinit(self.gpa);
+
+        if (result.succeeded()) {
+            try self.prepared_cells.append(self.gpa, cell);
+            if (visibility == .visible) {
+                try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: ready\n", .{ cell.index + 1, nb.cells.len, cell.displayName() });
+                try self.writeCommandOutput(nb, result, path, generated.line_maps);
+            }
+            return;
+        }
+
+        if (visibility == .visible) {
+            try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: failed\n", .{ cell.index + 1, nb.cells.len, cell.displayName() });
+        } else {
+            try cli_io.printErr(self.gpa, self.io, "failed while preparing cell {s}\n", .{cell.displayName()});
+        }
+        try self.writeCommandOutput(nb, result, path, generated.line_maps);
+        return error.CellFailed;
+    }
+
+    fn isPrepared(self: Runner, cell: notebook.Cell) bool {
+        for (self.prepared_cells.items) |prepared| {
+            if (prepared.index == cell.index) return true;
+        }
+        return false;
+    }
+
+    fn buildDeclarationSource(self: *Runner, cell: notebook.Cell) !GeneratedSource {
         var output: std.ArrayList(u8) = .empty;
         errdefer output.deinit(self.gpa);
 
-        try output.appendSlice(self.gpa, "// Generated by Zig-lab for declaration checking.\n\n");
-        try output.appendSlice(self.gpa, self.globals.items);
-        try output.appendSlice(self.gpa, source);
-        if (!std.mem.endsWith(u8, source, "\n")) try output.append(self.gpa, '\n');
-        try output.appendSlice(self.gpa, "\npub fn main() !void {}\n");
+        var line_maps: std.ArrayList(LineMap) = .empty;
+        errdefer line_maps.deinit(self.gpa);
 
-        return output.toOwnedSlice(self.gpa);
+        try appendNoMap(self.gpa, &output, &line_maps, "// Generated by Zig-lab for declaration checking.\n\n");
+        try self.appendPreparedCells(&output, &line_maps);
+        try appendMappedCellSource(self.gpa, &output, &line_maps, cell, "");
+        try appendNoMap(self.gpa, &output, &line_maps, "\npub fn main() !void {}\n");
+
+        const source = try output.toOwnedSlice(self.gpa);
+        errdefer self.gpa.free(source);
+        const maps = try line_maps.toOwnedSlice(self.gpa);
+
+        return .{ .source = source, .line_maps = maps };
     }
 
-    fn buildRunSource(self: *Runner, source: []const u8) ![]u8 {
+    fn buildRunSource(self: *Runner, cell: notebook.Cell) !GeneratedSource {
         var output: std.ArrayList(u8) = .empty;
         errdefer output.deinit(self.gpa);
 
-        try output.appendSlice(self.gpa, "// Generated by Zig-lab for cell execution.\n\n");
-        try output.appendSlice(self.gpa, self.globals.items);
-        try output.appendSlice(self.gpa, "pub fn main() !void {\n");
-        try appendIndented(self.gpa, &output, source);
-        try output.appendSlice(self.gpa, "\n}\n");
+        var line_maps: std.ArrayList(LineMap) = .empty;
+        errdefer line_maps.deinit(self.gpa);
 
-        return output.toOwnedSlice(self.gpa);
+        try appendNoMap(self.gpa, &output, &line_maps, "// Generated by Zig-lab for cell execution.\n\n");
+        try self.appendPreparedCells(&output, &line_maps);
+        try appendNoMap(self.gpa, &output, &line_maps, "pub fn main() !void {\n");
+        try appendMappedCellSource(self.gpa, &output, &line_maps, cell, "    ");
+        try appendNoMap(self.gpa, &output, &line_maps, "}\n");
+
+        const source = try output.toOwnedSlice(self.gpa);
+        errdefer self.gpa.free(source);
+        const maps = try line_maps.toOwnedSlice(self.gpa);
+
+        return .{ .source = source, .line_maps = maps };
     }
 
-    fn buildTestSource(self: *Runner, source: []const u8) ![]u8 {
+    fn buildTestSource(self: *Runner, cell: notebook.Cell) !GeneratedSource {
         var output: std.ArrayList(u8) = .empty;
         errdefer output.deinit(self.gpa);
 
-        try output.appendSlice(self.gpa, "// Generated by Zig-lab for test execution.\n\n");
-        try output.appendSlice(self.gpa, self.globals.items);
-        try output.appendSlice(self.gpa, source);
-        if (!std.mem.endsWith(u8, source, "\n")) try output.append(self.gpa, '\n');
+        var line_maps: std.ArrayList(LineMap) = .empty;
+        errdefer line_maps.deinit(self.gpa);
 
-        return output.toOwnedSlice(self.gpa);
+        try appendNoMap(self.gpa, &output, &line_maps, "// Generated by Zig-lab for test execution.\n\n");
+        try self.appendPreparedCells(&output, &line_maps);
+        try appendMappedCellSource(self.gpa, &output, &line_maps, cell, "");
+
+        const source = try output.toOwnedSlice(self.gpa);
+        errdefer self.gpa.free(source);
+        const maps = try line_maps.toOwnedSlice(self.gpa);
+
+        return .{ .source = source, .line_maps = maps };
     }
 
-    fn addGlobal(self: *Runner, source: []const u8) !void {
-        try self.globals.appendSlice(self.gpa, source);
-        if (!std.mem.endsWith(u8, source, "\n")) try self.globals.append(self.gpa, '\n');
-        try self.globals.append(self.gpa, '\n');
+    fn appendPreparedCells(self: *Runner, output: *std.ArrayList(u8), line_maps: *std.ArrayList(LineMap)) !void {
+        for (self.prepared_cells.items) |cell| {
+            try appendMappedCellSource(self.gpa, output, line_maps, cell, "");
+            try appendNoMap(self.gpa, output, line_maps, "\n");
+        }
     }
 
     fn writeGeneratedSource(self: *Runner, cell_index: usize, suffix: []const u8, source: []const u8) ![]u8 {
@@ -282,6 +391,20 @@ pub const Runner = struct {
             .stderr = result.stderr,
         };
     }
+
+    fn writeCommandOutput(self: *Runner, nb: notebook.Notebook, result: CommandResult, generated_path: []const u8, line_maps: []const LineMap) !void {
+        if (result.stdout.len > 0) {
+            try cli_io.write(self.io, result.stdout);
+            if (!std.mem.endsWith(u8, result.stdout, "\n")) try cli_io.write(self.io, "\n");
+        }
+        if (result.stderr.len > 0) {
+            const rewritten = try rewriteDiagnostics(self.gpa, result.stderr, generated_path, nb.path, line_maps);
+            defer self.gpa.free(rewritten);
+
+            try cli_io.write(self.io, rewritten);
+            if (!std.mem.endsWith(u8, rewritten, "\n")) try cli_io.write(self.io, "\n");
+        }
+    }
 };
 
 const CommandResult = struct {
@@ -303,14 +426,34 @@ const CommandResult = struct {
     }
 };
 
-fn writeCommandOutput(runner: *Runner, result: CommandResult) !void {
-    if (result.stdout.len > 0) {
-        try cli_io.write(runner.io, result.stdout);
-        if (!std.mem.endsWith(u8, result.stdout, "\n")) try cli_io.write(runner.io, "\n");
+fn appendNoMap(gpa: std.mem.Allocator, output: *std.ArrayList(u8), line_maps: *std.ArrayList(LineMap), text: []const u8) !void {
+    try output.appendSlice(gpa, text);
+    for (text) |char| {
+        if (char == '\n') try line_maps.append(gpa, .{});
     }
-    if (result.stderr.len > 0) {
-        try cli_io.write(runner.io, result.stderr);
-        if (!std.mem.endsWith(u8, result.stderr, "\n")) try cli_io.write(runner.io, "\n");
+}
+
+fn appendMappedCellSource(
+    gpa: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    line_maps: *std.ArrayList(LineMap),
+    cell: notebook.Cell,
+    indent: []const u8,
+) !void {
+    var offset: usize = 0;
+    var cell_line: usize = 1;
+    while (offset < cell.source.len) : (cell_line += 1) {
+        const newline_index = std.mem.indexOfScalarPos(u8, cell.source, offset, '\n') orelse cell.source.len;
+        const line = cell.source[offset..newline_index];
+        if (line.len > 0) try output.appendSlice(gpa, indent);
+        try output.appendSlice(gpa, line);
+        try output.append(gpa, '\n');
+        try line_maps.append(gpa, .{
+            .cell = cell,
+            .cell_line = cell_line,
+            .column_offset = if (line.len > 0) indent.len else 0,
+        });
+        offset = if (newline_index < cell.source.len) newline_index + 1 else cell.source.len;
     }
 }
 
@@ -326,6 +469,124 @@ fn appendIndented(gpa: std.mem.Allocator, output: *std.ArrayList(u8), source: []
         try output.append(gpa, '\n');
         offset = if (newline_index < source.len) newline_index + 1 else source.len;
     }
+}
+
+fn rewriteDiagnostics(
+    gpa: std.mem.Allocator,
+    text: []const u8,
+    generated_path: []const u8,
+    notebook_path: []const u8,
+    line_maps: []const LineMap,
+) ![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(gpa);
+
+    var offset: usize = 0;
+    while (offset < text.len) {
+        const newline_index = std.mem.indexOfScalarPos(u8, text, offset, '\n') orelse text.len;
+        const line = text[offset..newline_index];
+        try appendRewrittenDiagnosticLine(gpa, &output, line, generated_path, notebook_path, line_maps);
+        if (newline_index < text.len) try output.append(gpa, '\n');
+        offset = if (newline_index < text.len) newline_index + 1 else text.len;
+    }
+
+    return output.toOwnedSlice(gpa);
+}
+
+fn appendRewrittenDiagnosticLine(
+    gpa: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    line: []const u8,
+    generated_path: []const u8,
+    notebook_path: []const u8,
+    line_maps: []const LineMap,
+) !void {
+    const diagnostic = parseGeneratedDiagnostic(line, generated_path) orelse {
+        try output.appendSlice(gpa, line);
+        return;
+    };
+
+    if (diagnostic.line == 0 or diagnostic.line > line_maps.len) {
+        try output.appendSlice(gpa, line);
+        return;
+    }
+
+    const map = line_maps[diagnostic.line - 1];
+    const cell = map.cell orelse {
+        try output.appendSlice(gpa, line);
+        return;
+    };
+
+    const mapped_column = if (diagnostic.column > map.column_offset)
+        diagnostic.column - map.column_offset
+    else
+        1;
+    const notebook_line = cell.source_start_line + map.cell_line - 1;
+
+    const rewritten = try std.fmt.allocPrint(
+        gpa,
+        "{s}:{d}:{d}: cell {s} line {d}{s}",
+        .{ notebook_path, notebook_line, mapped_column, cell.displayName(), map.cell_line, diagnostic.rest },
+    );
+    defer gpa.free(rewritten);
+
+    try output.appendSlice(gpa, rewritten);
+}
+
+const ParsedDiagnostic = struct {
+    line: usize,
+    column: usize,
+    rest: []const u8,
+};
+
+fn parseGeneratedDiagnostic(line: []const u8, generated_path: []const u8) ?ParsedDiagnostic {
+    const path_index = indexOfPathFlexible(line, generated_path) orelse return null;
+    var index = path_index + generated_path.len;
+
+    if (index >= line.len or line[index] != ':') return null;
+    index += 1;
+
+    const line_start = index;
+    while (index < line.len and std.ascii.isDigit(line[index])) index += 1;
+    if (line_start == index or index >= line.len or line[index] != ':') return null;
+    const generated_line = std.fmt.parseUnsigned(usize, line[line_start..index], 10) catch return null;
+    index += 1;
+
+    const column_start = index;
+    while (index < line.len and std.ascii.isDigit(line[index])) index += 1;
+    if (column_start == index) return null;
+    const generated_column = std.fmt.parseUnsigned(usize, line[column_start..index], 10) catch return null;
+
+    return .{
+        .line = generated_line,
+        .column = generated_column,
+        .rest = line[index..],
+    };
+}
+
+fn indexOfPathFlexible(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0 or needle.len > haystack.len) return null;
+
+    var start: usize = 0;
+    while (start + needle.len <= haystack.len) : (start += 1) {
+        var i: usize = 0;
+        while (i < needle.len) : (i += 1) {
+            if (!pathCharsEqual(haystack[start + i], needle[i])) break;
+        } else {
+            return start;
+        }
+    }
+
+    return null;
+}
+
+fn pathCharsEqual(a: u8, b: u8) bool {
+    if ((a == '/' or a == '\\') and (b == '/' or b == '\\')) return true;
+    return a == b;
+}
+
+fn isRunnableCell(cell: notebook.Cell) bool {
+    return isTestCell(cell.source) or containsLikelyStatement(cell.source);
 }
 
 fn isTestCell(source: []const u8) bool {
@@ -398,4 +659,34 @@ test "statement detection catches simple print cells" {
         \\const name = "Zig-lab";
         \\std.debug.print("hello {s}\n", .{name});
     ));
+}
+
+test "diagnostics rewrite generated file locations to notebook locations" {
+    const cell: notebook.Cell = .{
+        .index = 0,
+        .kind = .zig,
+        .language = "zig",
+        .id = "answer",
+        .depends_on = &.{},
+        .source = "const answer = missing;\n",
+        .source_start_line = 12,
+    };
+    const maps = [_]LineMap{
+        .{},
+        .{ .cell = cell, .cell_line = 1, .column_offset = 4 },
+    };
+
+    const rewritten = try rewriteDiagnostics(
+        std.testing.allocator,
+        ".zig-cache\\zig-lab\\cell_1_run.zig:2:20: error: use of undeclared identifier 'missing'\n",
+        ".zig-cache/zig-lab/cell_1_run.zig",
+        "examples/error.ziglab",
+        &maps,
+    );
+    defer std.testing.allocator.free(rewritten);
+
+    try std.testing.expectEqualStrings(
+        "examples/error.ziglab:12:16: cell answer line 1: error: use of undeclared identifier 'missing'\n",
+        rewritten,
+    );
 }

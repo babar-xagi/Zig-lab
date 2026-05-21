@@ -12,7 +12,9 @@ pub const Cell = struct {
     kind: CellKind,
     language: []const u8,
     id: ?[]const u8,
+    depends_on: []const []const u8,
     source: []const u8,
+    source_start_line: usize,
 
     pub fn displayName(cell: Cell) []const u8 {
         return cell.id orelse cell.language;
@@ -21,12 +23,17 @@ pub const Cell = struct {
 
 pub const Notebook = struct {
     allocator: std.mem.Allocator,
+    path: []u8,
     source: []u8,
     cells: []Cell,
 
     pub fn deinit(self: *Notebook) void {
+        for (self.cells) |cell| {
+            if (cell.depends_on.len > 0) self.allocator.free(cell.depends_on);
+        }
         self.allocator.free(self.cells);
         self.allocator.free(self.source);
+        self.allocator.free(self.path);
         self.* = undefined;
     }
 
@@ -52,6 +59,9 @@ pub fn load(gpa: std.mem.Allocator, io: Io, path: []const u8) !Notebook {
     const data = try Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(16 * 1024 * 1024));
     errdefer gpa.free(data);
 
+    const owned_path = try gpa.dupe(u8, path);
+    errdefer gpa.free(owned_path);
+
     var cells: std.ArrayList(Cell) = .empty;
     errdefer cells.deinit(gpa);
 
@@ -59,6 +69,7 @@ pub fn load(gpa: std.mem.Allocator, io: Io, path: []const u8) !Notebook {
 
     return .{
         .allocator = gpa,
+        .path = owned_path,
         .source = data,
         .cells = try cells.toOwnedSlice(gpa),
     };
@@ -70,9 +81,12 @@ fn parseCells(gpa: std.mem.Allocator, data: []const u8, cells: *std.ArrayList(Ce
     var cell_start: usize = 0;
     var cell_language: []const u8 = "";
     var cell_id: ?[]const u8 = null;
+    var cell_depends_on: []const []const u8 = &.{};
     var cell_kind: CellKind = .other;
+    var cell_source_start_line: usize = 1;
+    var line_number: usize = 1;
 
-    while (offset < data.len) {
+    while (offset < data.len) : (line_number += 1) {
         const line_start = offset;
         const newline_index = std.mem.indexOfScalarPos(u8, data, offset, '\n') orelse data.len;
         const line_end = if (newline_index > line_start and data[newline_index - 1] == '\r') newline_index - 1 else newline_index;
@@ -89,8 +103,11 @@ fn parseCells(gpa: std.mem.Allocator, data: []const u8, cells: *std.ArrayList(Ce
                     .kind = cell_kind,
                     .language = cell_language,
                     .id = cell_id,
+                    .depends_on = cell_depends_on,
                     .source = data[cell_start..line_start],
+                    .source_start_line = cell_source_start_line,
                 });
+                cell_depends_on = &.{};
                 in_cell = false;
             }
             continue;
@@ -105,11 +122,14 @@ fn parseCells(gpa: std.mem.Allocator, data: []const u8, cells: *std.ArrayList(Ce
         if (kind == .other) continue;
 
         var id: ?[]const u8 = null;
+        var depends_on: []const []const u8 = &.{};
         while (tokens.next()) |token| {
             if (std.mem.startsWith(u8, token, "cell-id=")) {
                 id = token["cell-id=".len..];
             } else if (std.mem.startsWith(u8, token, "id=")) {
                 id = token["id=".len..];
+            } else if (std.mem.startsWith(u8, token, "depends-on=")) {
+                depends_on = try parseDepends(gpa, token["depends-on=".len..]);
             }
         }
 
@@ -117,7 +137,13 @@ fn parseCells(gpa: std.mem.Allocator, data: []const u8, cells: *std.ArrayList(Ce
         cell_start = offset;
         cell_language = language;
         cell_id = id;
+        cell_depends_on = depends_on;
         cell_kind = kind;
+        cell_source_start_line = line_number + 1;
+    }
+
+    if (in_cell and cell_depends_on.len > 0) {
+        gpa.free(cell_depends_on);
     }
 }
 
@@ -126,6 +152,22 @@ fn kindFromLanguage(language: []const u8) CellKind {
     if (std.mem.eql(u8, language, "markdown")) return .markdown;
     if (std.mem.eql(u8, language, "md")) return .markdown;
     return .other;
+}
+
+fn parseDepends(gpa: std.mem.Allocator, raw: []const u8) ![]const []const u8 {
+    var deps: std.ArrayList([]const u8) = .empty;
+    errdefer deps.deinit(gpa);
+
+    var parts = std.mem.splitScalar(u8, raw, ',');
+    while (parts.next()) |part| {
+        const dep = std.mem.trim(u8, part, " \t\r");
+        if (dep.len > 0) {
+            try deps.append(gpa, dep);
+        }
+    }
+
+    if (deps.items.len == 0) return &.{};
+    return deps.toOwnedSlice(gpa);
 }
 
 test "parse fenced notebook cells" {
@@ -150,4 +192,33 @@ test "parse fenced notebook cells" {
     try std.testing.expectEqual(CellKind.zig, cells.items[1].kind);
     try std.testing.expectEqualStrings("intro", cells.items[0].id.?);
     try std.testing.expectEqualStrings("hello", cells.items[1].id.?);
+    try std.testing.expectEqual(@as(usize, 2), cells.items[0].source_start_line);
+
+    for (cells.items) |cell| {
+        if (cell.depends_on.len > 0) std.testing.allocator.free(cell.depends_on);
+    }
+}
+
+test "parse cell dependencies" {
+    const input =
+        \\```zig cell-id=answer depends-on=imports,add-fn
+        \\const answer = add(20, 22);
+        \\```
+        \\
+    ;
+
+    var cells: std.ArrayList(Cell) = .empty;
+    defer cells.deinit(std.testing.allocator);
+
+    try parseCells(std.testing.allocator, input, &cells);
+    defer {
+        for (cells.items) |cell| {
+            if (cell.depends_on.len > 0) std.testing.allocator.free(cell.depends_on);
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), cells.items.len);
+    try std.testing.expectEqual(@as(usize, 2), cells.items[0].depends_on.len);
+    try std.testing.expectEqualStrings("imports", cells.items[0].depends_on[0]);
+    try std.testing.expectEqualStrings("add-fn", cells.items[0].depends_on[1]);
 }

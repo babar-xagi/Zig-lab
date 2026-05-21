@@ -301,7 +301,7 @@ fn add(a: i32, b: i32) i32 {
 }
 ```
 
-```zig cell-id=answer depends-on=add-fn
+```zig cell-id=answer depends-on=imports,add-fn
 const answer = add(20, 22);
 std.debug.print("answer = {}\n", .{answer});
 ```

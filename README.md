@@ -101,10 +101,34 @@ Run only one cell:
 zig build run -- run examples/hello.ziglab --cell answer
 ```
 
+Cells can declare explicit dependencies:
+
+````text
+```zig cell-id=answer depends-on=imports,add-fn
+```
+````
+
+When a selected cell has `depends-on=...`, Zig-lab prepares only those declaration cells before running it.
+
 Export Zig cells:
 
 ```powershell
 zig build run -- export examples/hello.ziglab
+```
+
+Check diagnostic mapping with the intentional error example:
+
+```powershell
+zig build run -- run examples/error.ziglab --cell broken
+```
+
+Compiler errors should point back to the notebook path, cell id, and original cell line.
+
+For intentional failures, `zig build run` will also print Zig's build-run failure footer because the app exits with code `1`. To see only Zig-lab's output, build once and run the executable directly:
+
+```powershell
+zig build
+.\zig-out\bin\zig-lab.exe run examples/error.ziglab --cell broken
 ```
 
 ## Documentation

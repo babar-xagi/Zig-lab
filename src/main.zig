@@ -33,11 +33,11 @@ pub fn main(init: std.process.Init) !void {
 
     const command = args[1];
     if (std.mem.eql(u8, command, "run")) {
-        try cmdRun(gpa, io, args[2..]);
+        cmdRun(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "check")) {
-        try cmdCheck(gpa, io, args[2..]);
+        cmdCheck(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "export")) {
-        try cmdExport(gpa, io, args[2..]);
+        cmdExport(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else {
         try cli_io.printErr(gpa, io, "unknown command: {s}\n\n", .{command});
         try cli_io.writeErr(io, usage);
@@ -128,4 +128,18 @@ fn cmdExport(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
 
 fn isHelp(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "help");
+}
+
+fn handleCommandError(err: anyerror) anyerror!void {
+    switch (err) {
+        error.CellFailed,
+        error.CellNotFound,
+        error.CellNotExecutable,
+        error.DependencyNotFound,
+        error.DependencyNotDeclaration,
+        error.DependencyCycle,
+        error.InvalidNotebook,
+        => std.process.exit(1),
+        else => return err,
+    }
 }
