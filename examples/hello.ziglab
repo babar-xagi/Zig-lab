@@ -1,0 +1,36 @@
+---
+schema: 1
+title: Hello Zig-lab
+---
+
+```markdown cell-id=intro
+# Hello Zig-lab
+
+Run small Zig cells one at a time, like a notebook.
+```
+
+```zig cell-id=imports
+const std = @import("std");
+```
+
+```zig cell-id=hello depends-on=imports
+const name = "Zig-lab";
+std.debug.print("hello from {s}\n", .{name});
+```
+
+```zig cell-id=add-fn
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+```
+
+```zig cell-id=answer depends-on=add-fn
+const answer = add(20, 22);
+std.debug.print("answer = {}\n", .{answer});
+```
+
+```zig cell-id=sum-test depends-on=add-fn
+test "add works" {
+    try std.testing.expectEqual(@as(i32, 42), add(20, 22));
+}
+```
