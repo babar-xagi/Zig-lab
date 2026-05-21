@@ -12,12 +12,14 @@ const usage =
     \\  zig-lab run <notebook.ziglab> [--cell <cell-id>] [--save-outputs]
     \\  zig-lab check <notebook.ziglab>
     \\  zig-lab list <notebook.ziglab>
+    \\  zig-lab outputs <notebook.ziglab>
     \\  zig-lab export <notebook.ziglab> [--out <file.zig>]
     \\
     \\Examples:
     \\  zig-lab run examples/hello.ziglab
     \\  zig-lab run examples/hello.ziglab --cell answer --save-outputs
     \\  zig-lab list examples/hello.ziglab
+    \\  zig-lab outputs examples/hello.ziglab
     \\  zig-lab export examples/hello.ziglab --out generated/hello.zig
     \\
 ;
@@ -40,6 +42,8 @@ pub fn main(init: std.process.Init) !void {
         cmdCheck(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "list")) {
         cmdList(gpa, io, args[2..]) catch |err| try handleCommandError(err);
+    } else if (std.mem.eql(u8, command, "outputs")) {
+        cmdOutputs(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "export")) {
         cmdExport(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else {
@@ -113,6 +117,21 @@ fn cmdList(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
     defer runner.deinit();
 
     try runner.listNotebook(nb);
+}
+
+fn cmdOutputs(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
+    if (args.len != 1) {
+        try cli_io.writeErr(io, usage);
+        std.process.exit(2);
+    }
+
+    var nb = try notebook.load(gpa, io, args[0]);
+    defer nb.deinit();
+
+    var runner: runner_mod.Runner = .{ .gpa = gpa, .io = io };
+    defer runner.deinit();
+
+    try runner.listOutputs(nb);
 }
 
 fn cmdExport(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {

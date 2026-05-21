@@ -301,6 +301,7 @@ zig-lab run examples/hello.ziglab --cell answer
 zig-lab run examples/hello.ziglab --cell answer --save-outputs
 zig-lab check examples/hello.ziglab
 zig-lab list examples/hello.ziglab
+zig-lab outputs examples/hello.ziglab
 ```
 
 This proves execution without any UI.

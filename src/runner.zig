@@ -131,6 +131,34 @@ pub const Runner = struct {
         }
     }
 
+    pub fn listOutputs(self: *Runner, nb: notebook.Notebook) !void {
+        const output_dir = try std.fmt.allocPrint(self.gpa, "{s}.outputs", .{nb.path});
+        defer self.gpa.free(output_dir);
+
+        try cli_io.print(self.gpa, self.io, "Notebook: {s}\n", .{nb.path});
+        try cli_io.print(self.gpa, self.io, "Outputs:  {s}\n\n", .{output_dir});
+
+        var saved_count: usize = 0;
+        for (nb.cells) |cell| {
+            if (cell.kind != .zig) continue;
+
+            const files = try self.outputFileStats(output_dir, cell);
+            if (!files.hasAny()) continue;
+
+            saved_count += 1;
+            try cli_io.print(self.gpa, self.io, "[{d}] {s} mode={s}", .{ cell.index + 1, cell.displayName(), effectiveMode(cell).label() });
+            if (files.output) |size| try cli_io.print(self.gpa, self.io, " output={d}B", .{size});
+            if (files.stdout) |size| try cli_io.print(self.gpa, self.io, " stdout={d}B", .{size});
+            if (files.stderr) |size| try cli_io.print(self.gpa, self.io, " stderr={d}B", .{size});
+            if (files.meta) |size| try cli_io.print(self.gpa, self.io, " meta={d}B", .{size});
+            try cli_io.write(self.io, "\n");
+        }
+
+        if (saved_count == 0) {
+            try cli_io.write(self.io, "No saved outputs found. Run a cell with --save-outputs first.\n");
+        }
+    }
+
     pub fn exportNotebook(self: *Runner, nb: notebook.Notebook, out_path: ?[]const u8) !void {
         var exported: std.ArrayList(u8) = .empty;
         defer exported.deinit(self.gpa);
@@ -509,6 +537,46 @@ pub const Runner = struct {
         try meta.appendSlice(self.gpa, "}\n");
 
         return meta.toOwnedSlice(self.gpa);
+    }
+
+    fn outputFileStats(self: *Runner, output_dir: []const u8, cell: notebook.Cell) !OutputFileStats {
+        const stem = try cellOutputStem(self.gpa, cell);
+        defer self.gpa.free(stem);
+
+        const stdout_path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.stdout.txt", .{ output_dir, stem });
+        defer self.gpa.free(stdout_path);
+        const stderr_path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.stderr.txt", .{ output_dir, stem });
+        defer self.gpa.free(stderr_path);
+        const output_path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.output.txt", .{ output_dir, stem });
+        defer self.gpa.free(output_path);
+        const meta_path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.meta.json", .{ output_dir, stem });
+        defer self.gpa.free(meta_path);
+
+        return .{
+            .stdout = try self.fileSizeOrNull(stdout_path),
+            .stderr = try self.fileSizeOrNull(stderr_path),
+            .output = try self.fileSizeOrNull(output_path),
+            .meta = try self.fileSizeOrNull(meta_path),
+        };
+    }
+
+    fn fileSizeOrNull(self: *Runner, path: []const u8) !?u64 {
+        const stat = Io.Dir.cwd().statFile(self.io, path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => |e| return e,
+        };
+        return stat.size;
+    }
+};
+
+const OutputFileStats = struct {
+    stdout: ?u64 = null,
+    stderr: ?u64 = null,
+    output: ?u64 = null,
+    meta: ?u64 = null,
+
+    fn hasAny(stats: OutputFileStats) bool {
+        return stats.stdout != null or stats.stderr != null or stats.output != null or stats.meta != null;
     }
 };
 

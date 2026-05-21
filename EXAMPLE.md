@@ -271,6 +271,12 @@ examples/hello.ziglab.outputs/
   answer.meta.json
 ```
 
+List saved outputs:
+
+```powershell
+zig-lab outputs examples/hello.ziglab
+```
+
 Check a notebook without running side effects:
 
 ```powershell

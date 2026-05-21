@@ -123,6 +123,12 @@ examples/hello.ziglab.outputs/
   answer.meta.json
 ```
 
+List saved outputs:
+
+```powershell
+zig build run -- outputs examples/hello.ziglab
+```
+
 Cells can declare explicit dependencies:
 
 ````text
