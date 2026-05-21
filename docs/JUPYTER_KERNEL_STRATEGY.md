@@ -298,7 +298,9 @@ Build a command-line runner first:
 ```powershell
 zig-lab run examples/hello.ziglab
 zig-lab run examples/hello.ziglab --cell answer
+zig-lab run examples/hello.ziglab --cell answer --save-outputs
 zig-lab check examples/hello.ziglab
+zig-lab list examples/hello.ziglab
 ```
 
 This proves execution without any UI.
@@ -411,4 +413,3 @@ Shared risk:
 Build the **runner core first**, then the **Jupyter/Anaconda kernel**, then the **native editor**.
 
 That path is fastest, safest, and still ambitious. It gives Zig-lab an early usable notebook experience while preserving the bigger vision: a rich, fast, native Zig notebook editor.
-

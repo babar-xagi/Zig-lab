@@ -9,11 +9,11 @@ title: Error Mapping Example
 This notebook intentionally contains a compiler error so Zig-lab can show diagnostics mapped back to the notebook cell.
 ```
 
-```zig cell-id=imports
+```zig cell-id=imports mode=decl
 const std = @import("std");
 ```
 
-```zig cell-id=broken depends-on=imports
+```zig cell-id=broken mode=run depends-on=imports
 const value = missing_value;
 std.debug.print("value = {}\n", .{value});
 ```

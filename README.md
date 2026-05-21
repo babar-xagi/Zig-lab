@@ -89,6 +89,12 @@ Check an example notebook:
 zig build run -- check examples/hello.ziglab
 ```
 
+List cells:
+
+```powershell
+zig build run -- list examples/hello.ziglab
+```
+
 Run all cells:
 
 ```powershell
@@ -101,14 +107,30 @@ Run only one cell:
 zig build run -- run examples/hello.ziglab --cell answer
 ```
 
+Save cell outputs:
+
+```powershell
+zig build run -- run examples/hello.ziglab --cell answer --save-outputs
+```
+
+This writes files under:
+
+```text
+examples/hello.ziglab.outputs/
+  answer.stdout.txt
+  answer.stderr.txt
+  answer.output.txt
+  answer.meta.json
+```
+
 Cells can declare explicit dependencies:
 
 ````text
-```zig cell-id=answer depends-on=imports,add-fn
+```zig cell-id=answer mode=run depends-on=imports,add-fn
 ```
 ````
 
-When a selected cell has `depends-on=...`, Zig-lab prepares only those declaration cells before running it.
+Zig cells can use `mode=decl`, `mode=run`, or `mode=test`. If `mode=` is missing, Zig-lab falls back to auto-detection for now. When a selected cell has `depends-on=...`, Zig-lab prepares only those declaration cells before running it.
 
 Export Zig cells:
 

@@ -255,6 +255,22 @@ Expected output:
 answer = 42
 ```
 
+Save outputs for later inspection:
+
+```powershell
+zig-lab run examples/hello.ziglab --cell answer --save-outputs
+```
+
+Expected files:
+
+```text
+examples/hello.ziglab.outputs/
+  answer.stdout.txt
+  answer.stderr.txt
+  answer.output.txt
+  answer.meta.json
+```
+
 Check a notebook without running side effects:
 
 ```powershell
@@ -286,22 +302,22 @@ zig_version: project-default
 Small notebook that runs Zig code one cell at a time.
 ```
 
-```zig cell-id=imports
+```zig cell-id=imports mode=decl
 const std = @import("std");
 ```
 
-```zig cell-id=hello depends-on=imports
+```zig cell-id=hello mode=run depends-on=imports
 const name = "Zig-lab";
 std.debug.print("hello from {s}\n", .{name});
 ```
 
-```zig cell-id=add-fn
+```zig cell-id=add-fn mode=decl
 fn add(a: i32, b: i32) i32 {
     return a + b;
 }
 ```
 
-```zig cell-id=answer depends-on=imports,add-fn
+```zig cell-id=answer mode=run depends-on=imports,add-fn
 const answer = add(20, 22);
 std.debug.print("answer = {}\n", .{answer});
 ```

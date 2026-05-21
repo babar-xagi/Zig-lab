@@ -7,11 +7,28 @@ pub const CellKind = enum {
     other,
 };
 
+pub const CellMode = enum {
+    auto,
+    decl,
+    run,
+    test_,
+
+    pub fn label(mode: CellMode) []const u8 {
+        return switch (mode) {
+            .auto => "auto",
+            .decl => "decl",
+            .run => "run",
+            .test_ => "test",
+        };
+    }
+};
+
 pub const Cell = struct {
     index: usize,
     kind: CellKind,
     language: []const u8,
     id: ?[]const u8,
+    mode: CellMode,
     depends_on: []const []const u8,
     source: []const u8,
     source_start_line: usize,
@@ -81,6 +98,7 @@ fn parseCells(gpa: std.mem.Allocator, data: []const u8, cells: *std.ArrayList(Ce
     var cell_start: usize = 0;
     var cell_language: []const u8 = "";
     var cell_id: ?[]const u8 = null;
+    var cell_mode: CellMode = .auto;
     var cell_depends_on: []const []const u8 = &.{};
     var cell_kind: CellKind = .other;
     var cell_source_start_line: usize = 1;
@@ -103,6 +121,7 @@ fn parseCells(gpa: std.mem.Allocator, data: []const u8, cells: *std.ArrayList(Ce
                     .kind = cell_kind,
                     .language = cell_language,
                     .id = cell_id,
+                    .mode = cell_mode,
                     .depends_on = cell_depends_on,
                     .source = data[cell_start..line_start],
                     .source_start_line = cell_source_start_line,
@@ -122,12 +141,15 @@ fn parseCells(gpa: std.mem.Allocator, data: []const u8, cells: *std.ArrayList(Ce
         if (kind == .other) continue;
 
         var id: ?[]const u8 = null;
+        var mode: CellMode = .auto;
         var depends_on: []const []const u8 = &.{};
         while (tokens.next()) |token| {
             if (std.mem.startsWith(u8, token, "cell-id=")) {
                 id = token["cell-id=".len..];
             } else if (std.mem.startsWith(u8, token, "id=")) {
                 id = token["id=".len..];
+            } else if (std.mem.startsWith(u8, token, "mode=")) {
+                mode = try parseMode(token["mode=".len..]);
             } else if (std.mem.startsWith(u8, token, "depends-on=")) {
                 depends_on = try parseDepends(gpa, token["depends-on=".len..]);
             }
@@ -137,6 +159,7 @@ fn parseCells(gpa: std.mem.Allocator, data: []const u8, cells: *std.ArrayList(Ce
         cell_start = offset;
         cell_language = language;
         cell_id = id;
+        cell_mode = mode;
         cell_depends_on = depends_on;
         cell_kind = kind;
         cell_source_start_line = line_number + 1;
@@ -170,6 +193,14 @@ fn parseDepends(gpa: std.mem.Allocator, raw: []const u8) ![]const []const u8 {
     return deps.toOwnedSlice(gpa);
 }
 
+fn parseMode(raw: []const u8) !CellMode {
+    if (std.mem.eql(u8, raw, "auto")) return .auto;
+    if (std.mem.eql(u8, raw, "decl")) return .decl;
+    if (std.mem.eql(u8, raw, "run")) return .run;
+    if (std.mem.eql(u8, raw, "test")) return .test_;
+    return error.InvalidCellMode;
+}
+
 test "parse fenced notebook cells" {
     const input =
         \\```markdown cell-id=intro
@@ -192,6 +223,7 @@ test "parse fenced notebook cells" {
     try std.testing.expectEqual(CellKind.zig, cells.items[1].kind);
     try std.testing.expectEqualStrings("intro", cells.items[0].id.?);
     try std.testing.expectEqualStrings("hello", cells.items[1].id.?);
+    try std.testing.expectEqual(CellMode.auto, cells.items[1].mode);
     try std.testing.expectEqual(@as(usize, 2), cells.items[0].source_start_line);
 
     for (cells.items) |cell| {
@@ -201,7 +233,7 @@ test "parse fenced notebook cells" {
 
 test "parse cell dependencies" {
     const input =
-        \\```zig cell-id=answer depends-on=imports,add-fn
+        \\```zig cell-id=answer mode=run depends-on=imports,add-fn
         \\const answer = add(20, 22);
         \\```
         \\
@@ -218,6 +250,7 @@ test "parse cell dependencies" {
     }
 
     try std.testing.expectEqual(@as(usize, 1), cells.items.len);
+    try std.testing.expectEqual(CellMode.run, cells.items[0].mode);
     try std.testing.expectEqual(@as(usize, 2), cells.items[0].depends_on.len);
     try std.testing.expectEqualStrings("imports", cells.items[0].depends_on[0]);
     try std.testing.expectEqualStrings("add-fn", cells.items[0].depends_on[1]);

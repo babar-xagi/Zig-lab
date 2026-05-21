@@ -11,6 +11,7 @@ const Visibility = enum { visible, silent };
 
 pub const RunOptions = struct {
     selected_cell: ?[]const u8 = null,
+    save_outputs: bool = false,
 };
 
 const LineMap = struct {
@@ -57,14 +58,14 @@ pub const Runner = struct {
                 try self.preparePreviousDeclarationsBefore(nb, selected);
             }
 
-            try self.executeCell(nb, selected, .visible);
+            try self.executeCell(nb, selected, .visible, options.save_outputs);
             return;
         }
 
         for (nb.cells) |cell| {
             switch (cell.kind) {
                 .markdown => try cli_io.print(self.gpa, self.io, "[{d}/{d}] markdown: skipped\n", .{ cell.index + 1, nb.cells.len }),
-                .zig => try self.executeCell(nb, cell, .visible),
+                .zig => try self.executeCell(nb, cell, .visible, options.save_outputs),
                 .other => {},
             }
         }
@@ -87,7 +88,7 @@ pub const Runner = struct {
                     continue;
                 };
 
-                if (dep_cell.kind != .zig or isRunnableCell(dep_cell)) {
+                if (dep_cell.kind != .zig or effectiveMode(dep_cell) != .decl) {
                     has_dependency_error = true;
                     try cli_io.printErr(self.gpa, self.io, "dependency must be a Zig declaration cell: {s} -> {s}\n", .{ cell.displayName(), dep });
                 }
@@ -96,6 +97,38 @@ pub const Runner = struct {
 
         try cli_io.print(self.gpa, self.io, "Dependencies: {d}\n", .{dependency_count});
         if (has_dependency_error) return error.InvalidNotebook;
+    }
+
+    pub fn listNotebook(self: *Runner, nb: notebook.Notebook) !void {
+        try cli_io.print(self.gpa, self.io, "Notebook: {s}\n", .{nb.path});
+        try cli_io.print(self.gpa, self.io, "Cells:    {d}\n\n", .{nb.cells.len});
+
+        for (nb.cells) |cell| {
+            try cli_io.print(self.gpa, self.io, "[{d}] {s}", .{ cell.index + 1, kindLabel(cell.kind) });
+
+            if (cell.id) |id| {
+                try cli_io.print(self.gpa, self.io, " {s}", .{id});
+            } else {
+                try cli_io.print(self.gpa, self.io, " <no-id>", .{});
+            }
+
+            if (cell.kind == .zig) {
+                try cli_io.print(self.gpa, self.io, " mode={s}", .{effectiveMode(cell).label()});
+                if (cell.mode == .auto) {
+                    try cli_io.print(self.gpa, self.io, " inferred", .{});
+                }
+            }
+
+            if (cell.depends_on.len > 0) {
+                try cli_io.write(self.io, " depends-on=");
+                for (cell.depends_on, 0..) |dep, dep_index| {
+                    if (dep_index > 0) try cli_io.write(self.io, ",");
+                    try cli_io.write(self.io, dep);
+                }
+            }
+
+            try cli_io.print(self.gpa, self.io, " line={d}\n", .{cell.source_start_line});
+        }
     }
 
     pub fn exportNotebook(self: *Runner, nb: notebook.Notebook, out_path: ?[]const u8) !void {
@@ -119,30 +152,35 @@ pub const Runner = struct {
             const header = try std.fmt.allocPrint(self.gpa, "// cell {d}: {s}\n", .{ cell.index + 1, cell.displayName() });
             defer self.gpa.free(header);
 
-            if (isTestCell(cell.source)) {
-                try tests.appendSlice(self.gpa, header);
-                try tests.appendSlice(self.gpa, cell.source);
-                if (!std.mem.endsWith(u8, cell.source, "\n")) try tests.append(self.gpa, '\n');
-                try tests.append(self.gpa, '\n');
-            } else if (containsLikelyStatement(cell.source)) {
-                try main_body.appendSlice(self.gpa, "    ");
-                try main_body.appendSlice(self.gpa, header);
-                try appendIndented(self.gpa, &main_body, cell.source);
-                try main_body.append(self.gpa, '\n');
-            } else {
-                try declarations.appendSlice(self.gpa, header);
-                try declarations.appendSlice(self.gpa, cell.source);
-                if (!std.mem.endsWith(u8, cell.source, "\n")) try declarations.append(self.gpa, '\n');
-                try declarations.append(self.gpa, '\n');
+            switch (effectiveMode(cell)) {
+                .test_ => {
+                    try tests.appendSlice(self.gpa, header);
+                    try tests.appendSlice(self.gpa, cell.source);
+                    if (!std.mem.endsWith(u8, cell.source, "\n")) try tests.append(self.gpa, '\n');
+                    try tests.append(self.gpa, '\n');
+                },
+                .run => {
+                    try main_body.appendSlice(self.gpa, "    ");
+                    try main_body.appendSlice(self.gpa, header);
+                    try appendIndented(self.gpa, &main_body, cell.source);
+                    try main_body.append(self.gpa, '\n');
+                },
+                .decl, .auto => {
+                    try declarations.appendSlice(self.gpa, header);
+                    try declarations.appendSlice(self.gpa, cell.source);
+                    if (!std.mem.endsWith(u8, cell.source, "\n")) try declarations.append(self.gpa, '\n');
+                    try declarations.append(self.gpa, '\n');
+                },
             }
         }
 
         try exported.appendSlice(self.gpa, declarations.items);
 
         if (main_body.items.len > 0) {
+            trimTrailingNewlines(&main_body);
             try exported.appendSlice(self.gpa, "pub fn main() !void {\n");
             try exported.appendSlice(self.gpa, main_body.items);
-            try exported.appendSlice(self.gpa, "}\n\n");
+            try exported.appendSlice(self.gpa, "\n}\n\n");
         } else {
             try exported.appendSlice(self.gpa, "pub fn main() !void {}\n\n");
         }
@@ -160,19 +198,18 @@ pub const Runner = struct {
         }
     }
 
-    fn executeCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
+    fn executeCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility, save_outputs: bool) !void {
         try self.prepareDependencies(nb, cell);
 
-        if (isTestCell(cell.source)) {
-            try self.executeTestCell(nb, cell, visibility);
-        } else if (containsLikelyStatement(cell.source)) {
-            try self.executeRunCell(nb, cell, visibility);
-        } else {
-            try self.prepareDeclarationCell(nb, cell, visibility);
+        switch (effectiveMode(cell)) {
+            .test_ => try self.executeTestCell(nb, cell, visibility, save_outputs),
+            .run => try self.executeRunCell(nb, cell, visibility, save_outputs),
+            .decl => try self.prepareDeclarationCell(nb, cell, visibility, save_outputs),
+            .auto => unreachable,
         }
     }
 
-    fn executeRunCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
+    fn executeRunCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility, save_outputs: bool) !void {
         var generated = try self.buildRunSource(cell);
         defer generated.deinit(self.gpa);
 
@@ -185,13 +222,13 @@ pub const Runner = struct {
         if (visibility == .visible) {
             const status: []const u8 = if (result.succeeded()) "ran" else "failed";
             try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: {s}\n", .{ cell.index + 1, nb.cells.len, cell.displayName(), status });
-            try self.writeCommandOutput(nb, result, path, generated.line_maps);
+            try self.writeCommandOutput(nb, cell, result, path, generated.line_maps, save_outputs);
         }
 
         if (!result.succeeded()) return error.CellFailed;
     }
 
-    fn executeTestCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
+    fn executeTestCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility, save_outputs: bool) !void {
         var generated = try self.buildTestSource(cell);
         defer generated.deinit(self.gpa);
 
@@ -204,7 +241,7 @@ pub const Runner = struct {
         if (visibility == .visible) {
             const status: []const u8 = if (result.succeeded()) "passed" else "failed";
             try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: test {s}\n", .{ cell.index + 1, nb.cells.len, cell.displayName(), status });
-            try self.writeCommandOutput(nb, result, path, generated.line_maps);
+            try self.writeCommandOutput(nb, cell, result, path, generated.line_maps, save_outputs);
             if (result.succeeded() and result.stdout.len == 0 and result.stderr.len == 0) {
                 try cli_io.print(self.gpa, self.io, "All tests passed.\n", .{});
             }
@@ -217,10 +254,10 @@ pub const Runner = struct {
         for (nb.cells) |cell| {
             if (cell.index >= target.index) break;
             if (cell.kind != .zig) continue;
-            if (isRunnableCell(cell)) continue;
+            if (effectiveMode(cell) != .decl) continue;
 
             try self.prepareDependencies(nb, cell);
-            try self.prepareDeclarationCell(nb, cell, .silent);
+            try self.prepareDeclarationCell(nb, cell, .silent, false);
         }
     }
 
@@ -238,7 +275,7 @@ pub const Runner = struct {
                 return error.DependencyNotFound;
             };
 
-            if (dep_cell.kind != .zig or isRunnableCell(dep_cell)) {
+            if (dep_cell.kind != .zig or effectiveMode(dep_cell) != .decl) {
                 try cli_io.printErr(self.gpa, self.io, "dependency must be a Zig declaration cell: {s} -> {s}\n", .{ cell.displayName(), dep });
                 return error.DependencyNotDeclaration;
             }
@@ -256,11 +293,11 @@ pub const Runner = struct {
             defer _ = visiting.pop();
 
             try self.prepareDependenciesInternal(nb, dep_cell, visiting);
-            try self.prepareDeclarationCell(nb, dep_cell, .silent);
+            try self.prepareDeclarationCell(nb, dep_cell, .silent, false);
         }
     }
 
-    fn prepareDeclarationCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility) !void {
+    fn prepareDeclarationCell(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, visibility: Visibility, save_outputs: bool) !void {
         if (self.isPrepared(cell)) {
             if (visibility == .visible) {
                 try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: ready (cached)\n", .{ cell.index + 1, nb.cells.len, cell.displayName() });
@@ -281,7 +318,7 @@ pub const Runner = struct {
             try self.prepared_cells.append(self.gpa, cell);
             if (visibility == .visible) {
                 try cli_io.print(self.gpa, self.io, "[{d}/{d}] {s}: ready\n", .{ cell.index + 1, nb.cells.len, cell.displayName() });
-                try self.writeCommandOutput(nb, result, path, generated.line_maps);
+                try self.writeCommandOutput(nb, cell, result, path, generated.line_maps, save_outputs);
             }
             return;
         }
@@ -291,7 +328,7 @@ pub const Runner = struct {
         } else {
             try cli_io.printErr(self.gpa, self.io, "failed while preparing cell {s}\n", .{cell.displayName()});
         }
-        try self.writeCommandOutput(nb, result, path, generated.line_maps);
+        try self.writeCommandOutput(nb, cell, result, path, generated.line_maps, save_outputs);
         return error.CellFailed;
     }
 
@@ -392,18 +429,86 @@ pub const Runner = struct {
         };
     }
 
-    fn writeCommandOutput(self: *Runner, nb: notebook.Notebook, result: CommandResult, generated_path: []const u8, line_maps: []const LineMap) !void {
+    fn writeCommandOutput(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, result: CommandResult, generated_path: []const u8, line_maps: []const LineMap, save_outputs: bool) !void {
+        const rewritten_stderr = if (result.stderr.len > 0)
+            try rewriteDiagnostics(self.gpa, result.stderr, generated_path, nb.path, line_maps)
+        else
+            try self.gpa.dupe(u8, "");
+        defer self.gpa.free(rewritten_stderr);
+
         if (result.stdout.len > 0) {
             try cli_io.write(self.io, result.stdout);
             if (!std.mem.endsWith(u8, result.stdout, "\n")) try cli_io.write(self.io, "\n");
         }
-        if (result.stderr.len > 0) {
-            const rewritten = try rewriteDiagnostics(self.gpa, result.stderr, generated_path, nb.path, line_maps);
-            defer self.gpa.free(rewritten);
-
-            try cli_io.write(self.io, rewritten);
-            if (!std.mem.endsWith(u8, rewritten, "\n")) try cli_io.write(self.io, "\n");
+        if (rewritten_stderr.len > 0) {
+            try cli_io.write(self.io, rewritten_stderr);
+            if (!std.mem.endsWith(u8, rewritten_stderr, "\n")) try cli_io.write(self.io, "\n");
         }
+
+        if (save_outputs) {
+            try self.saveCellOutput(nb, cell, result, rewritten_stderr);
+        }
+    }
+
+    fn saveCellOutput(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, result: CommandResult, stderr: []const u8) !void {
+        const output_dir = try std.fmt.allocPrint(self.gpa, "{s}.outputs", .{nb.path});
+        defer self.gpa.free(output_dir);
+
+        try Io.Dir.cwd().createDirPath(self.io, output_dir);
+
+        const stem = try cellOutputStem(self.gpa, cell);
+        defer self.gpa.free(stem);
+
+        const stdout_path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.stdout.txt", .{ output_dir, stem });
+        defer self.gpa.free(stdout_path);
+        const stderr_path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.stderr.txt", .{ output_dir, stem });
+        defer self.gpa.free(stderr_path);
+        const output_path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.output.txt", .{ output_dir, stem });
+        defer self.gpa.free(output_path);
+        const meta_path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.meta.json", .{ output_dir, stem });
+        defer self.gpa.free(meta_path);
+
+        var combined: std.ArrayList(u8) = .empty;
+        defer combined.deinit(self.gpa);
+        try combined.appendSlice(self.gpa, result.stdout);
+        if (result.stdout.len > 0 and stderr.len > 0 and !std.mem.endsWith(u8, result.stdout, "\n")) {
+            try combined.append(self.gpa, '\n');
+        }
+        try combined.appendSlice(self.gpa, stderr);
+
+        const meta = try self.buildOutputMeta(nb, cell, result, stderr.len, combined.items.len);
+        defer self.gpa.free(meta);
+
+        try Io.Dir.cwd().writeFile(self.io, .{ .sub_path = stdout_path, .data = result.stdout });
+        try Io.Dir.cwd().writeFile(self.io, .{ .sub_path = stderr_path, .data = stderr });
+        try Io.Dir.cwd().writeFile(self.io, .{ .sub_path = output_path, .data = combined.items });
+        try Io.Dir.cwd().writeFile(self.io, .{ .sub_path = meta_path, .data = meta });
+
+        try cli_io.print(self.gpa, self.io, "outputs saved: {s}\n", .{output_dir});
+    }
+
+    fn buildOutputMeta(self: *Runner, nb: notebook.Notebook, cell: notebook.Cell, result: CommandResult, stderr_len: usize, output_len: usize) ![]u8 {
+        var meta: std.ArrayList(u8) = .empty;
+        errdefer meta.deinit(self.gpa);
+
+        try meta.appendSlice(self.gpa, "{\n");
+        try appendJsonFieldString(self.gpa, &meta, "notebook", nb.path, true);
+        try appendJsonFieldString(self.gpa, &meta, "cell_id", cell.displayName(), true);
+        try appendJsonFieldNumber(self.gpa, &meta, "cell_index", cell.index + 1, true);
+        try appendJsonFieldString(self.gpa, &meta, "mode", effectiveMode(cell).label(), true);
+        try appendJsonFieldString(self.gpa, &meta, "status", statusLabel(cell, result), true);
+        try appendJsonFieldBool(self.gpa, &meta, "succeeded", result.succeeded(), true);
+        if (exitCode(result.term)) |code| {
+            try appendJsonFieldNumber(self.gpa, &meta, "exit_code", code, true);
+        } else {
+            try meta.appendSlice(self.gpa, "  \"exit_code\": null,\n");
+        }
+        try appendJsonFieldNumber(self.gpa, &meta, "stdout_bytes", result.stdout.len, true);
+        try appendJsonFieldNumber(self.gpa, &meta, "stderr_bytes", stderr_len, true);
+        try appendJsonFieldNumber(self.gpa, &meta, "output_bytes", output_len, false);
+        try meta.appendSlice(self.gpa, "}\n");
+
+        return meta.toOwnedSlice(self.gpa);
     }
 };
 
@@ -468,6 +573,12 @@ fn appendIndented(gpa: std.mem.Allocator, output: *std.ArrayList(u8), source: []
         }
         try output.append(gpa, '\n');
         offset = if (newline_index < source.len) newline_index + 1 else source.len;
+    }
+}
+
+fn trimTrailingNewlines(output: *std.ArrayList(u8)) void {
+    while (output.items.len > 0 and output.items[output.items.len - 1] == '\n') {
+        output.items.len -= 1;
     }
 }
 
@@ -585,8 +696,115 @@ fn pathCharsEqual(a: u8, b: u8) bool {
     return a == b;
 }
 
-fn isRunnableCell(cell: notebook.Cell) bool {
-    return isTestCell(cell.source) or containsLikelyStatement(cell.source);
+fn effectiveMode(cell: notebook.Cell) notebook.CellMode {
+    if (cell.mode != .auto) return cell.mode;
+    if (isTestCell(cell.source)) return .test_;
+    if (containsLikelyStatement(cell.source)) return .run;
+    return .decl;
+}
+
+fn kindLabel(kind: notebook.CellKind) []const u8 {
+    return switch (kind) {
+        .markdown => "markdown",
+        .zig => "zig",
+        .other => "other",
+    };
+}
+
+fn statusLabel(cell: notebook.Cell, result: CommandResult) []const u8 {
+    if (!result.succeeded()) return "failed";
+    return switch (effectiveMode(cell)) {
+        .decl => "ready",
+        .run => "ran",
+        .test_ => "passed",
+        .auto => "ready",
+    };
+}
+
+fn exitCode(term: std.process.Child.Term) ?u8 {
+    return switch (term) {
+        .exited => |code| code,
+        else => null,
+    };
+}
+
+fn cellOutputStem(gpa: std.mem.Allocator, cell: notebook.Cell) ![]u8 {
+    if (cell.id) |id| {
+        var stem: std.ArrayList(u8) = .empty;
+        errdefer stem.deinit(gpa);
+
+        for (id) |char| {
+            try stem.append(gpa, if (isSafeFileChar(char)) char else '_');
+        }
+
+        if (stem.items.len == 0) {
+            try stem.appendSlice(gpa, "cell");
+        }
+
+        return stem.toOwnedSlice(gpa);
+    }
+
+    return std.fmt.allocPrint(gpa, "cell_{d}", .{cell.index + 1});
+}
+
+fn isSafeFileChar(char: u8) bool {
+    return (char >= 'a' and char <= 'z') or
+        (char >= 'A' and char <= 'Z') or
+        (char >= '0' and char <= '9') or
+        char == '-' or
+        char == '_' or
+        char == '.';
+}
+
+fn appendJsonFieldString(gpa: std.mem.Allocator, output: *std.ArrayList(u8), key: []const u8, value: []const u8, comma: bool) !void {
+    try output.appendSlice(gpa, "  ");
+    try appendJsonString(gpa, output, key);
+    try output.appendSlice(gpa, ": ");
+    try appendJsonString(gpa, output, value);
+    try output.appendSlice(gpa, if (comma) ",\n" else "\n");
+}
+
+fn appendJsonFieldNumber(gpa: std.mem.Allocator, output: *std.ArrayList(u8), key: []const u8, value: anytype, comma: bool) !void {
+    const number = try std.fmt.allocPrint(gpa, "{}", .{value});
+    defer gpa.free(number);
+
+    try output.appendSlice(gpa, "  ");
+    try appendJsonString(gpa, output, key);
+    try output.appendSlice(gpa, ": ");
+    try output.appendSlice(gpa, number);
+    try output.appendSlice(gpa, if (comma) ",\n" else "\n");
+}
+
+fn appendJsonFieldBool(gpa: std.mem.Allocator, output: *std.ArrayList(u8), key: []const u8, value: bool, comma: bool) !void {
+    try output.appendSlice(gpa, "  ");
+    try appendJsonString(gpa, output, key);
+    try output.appendSlice(gpa, ": ");
+    try output.appendSlice(gpa, if (value) "true" else "false");
+    try output.appendSlice(gpa, if (comma) ",\n" else "\n");
+}
+
+fn appendJsonString(gpa: std.mem.Allocator, output: *std.ArrayList(u8), value: []const u8) !void {
+    try output.append(gpa, '"');
+    for (value) |char| {
+        switch (char) {
+            '"' => try output.appendSlice(gpa, "\\\""),
+            '\\' => try output.appendSlice(gpa, "\\\\"),
+            '\n' => try output.appendSlice(gpa, "\\n"),
+            '\r' => try output.appendSlice(gpa, "\\r"),
+            '\t' => try output.appendSlice(gpa, "\\t"),
+            else => {
+                if (char < 0x20) {
+                    const hex = "0123456789abcdef";
+                    try output.appendSlice(gpa, "\\u00");
+                    try output.append(gpa, hex[char >> 4]);
+                    try output.append(gpa, hex[char & 0x0f]);
+                } else {
+                    try output.append(gpa, char);
+                }
+            },
+        }
+    }
+    try output.append(gpa, '"');
 }
 
 fn isTestCell(source: []const u8) bool {
@@ -667,6 +885,7 @@ test "diagnostics rewrite generated file locations to notebook locations" {
         .kind = .zig,
         .language = "zig",
         .id = "answer",
+        .mode = .run,
         .depends_on = &.{},
         .source = "const answer = missing;\n",
         .source_start_line = 12,

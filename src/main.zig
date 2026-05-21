@@ -9,13 +9,15 @@ const usage =
     \\Zig-lab
     \\
     \\Usage:
-    \\  zig-lab run <notebook.ziglab> [--cell <cell-id>]
+    \\  zig-lab run <notebook.ziglab> [--cell <cell-id>] [--save-outputs]
     \\  zig-lab check <notebook.ziglab>
+    \\  zig-lab list <notebook.ziglab>
     \\  zig-lab export <notebook.ziglab> [--out <file.zig>]
     \\
     \\Examples:
     \\  zig-lab run examples/hello.ziglab
-    \\  zig-lab run examples/hello.ziglab --cell answer
+    \\  zig-lab run examples/hello.ziglab --cell answer --save-outputs
+    \\  zig-lab list examples/hello.ziglab
     \\  zig-lab export examples/hello.ziglab --out generated/hello.zig
     \\
 ;
@@ -36,6 +38,8 @@ pub fn main(init: std.process.Init) !void {
         cmdRun(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "check")) {
         cmdCheck(gpa, io, args[2..]) catch |err| try handleCommandError(err);
+    } else if (std.mem.eql(u8, command, "list")) {
+        cmdList(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "export")) {
         cmdExport(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else {
@@ -53,6 +57,7 @@ fn cmdRun(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
 
     const path = args[0];
     var selected_cell: ?[]const u8 = null;
+    var save_outputs = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -63,6 +68,8 @@ fn cmdRun(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
                 std.process.exit(2);
             }
             selected_cell = args[i];
+        } else if (std.mem.eql(u8, args[i], "--save-outputs")) {
+            save_outputs = true;
         } else {
             try cli_io.printErr(gpa, io, "unknown option: {s}\n", .{args[i]});
             std.process.exit(2);
@@ -75,7 +82,7 @@ fn cmdRun(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
     var runner: runner_mod.Runner = .{ .gpa = gpa, .io = io };
     defer runner.deinit();
 
-    try runner.runNotebook(nb, .{ .selected_cell = selected_cell });
+    try runner.runNotebook(nb, .{ .selected_cell = selected_cell, .save_outputs = save_outputs });
 }
 
 fn cmdCheck(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
@@ -91,6 +98,21 @@ fn cmdCheck(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
     defer runner.deinit();
 
     try runner.checkNotebook(nb);
+}
+
+fn cmdList(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
+    if (args.len != 1) {
+        try cli_io.writeErr(io, usage);
+        std.process.exit(2);
+    }
+
+    var nb = try notebook.load(gpa, io, args[0]);
+    defer nb.deinit();
+
+    var runner: runner_mod.Runner = .{ .gpa = gpa, .io = io };
+    defer runner.deinit();
+
+    try runner.listNotebook(nb);
 }
 
 fn cmdExport(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
