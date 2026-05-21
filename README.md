@@ -129,6 +129,13 @@ List saved outputs:
 zig build run -- outputs examples/hello.ziglab
 ```
 
+Show saved output:
+
+```powershell
+zig build run -- show-output examples/hello.ziglab --cell answer
+zig build run -- show-output examples/hello.ziglab --cell answer --meta
+```
+
 Cells can declare explicit dependencies:
 
 ````text

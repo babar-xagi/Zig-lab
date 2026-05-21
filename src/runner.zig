@@ -14,6 +14,31 @@ pub const RunOptions = struct {
     save_outputs: bool = false,
 };
 
+pub const SavedOutputKind = enum {
+    output,
+    stdout,
+    stderr,
+    meta,
+
+    fn suffix(kind: SavedOutputKind) []const u8 {
+        return switch (kind) {
+            .output => "output.txt",
+            .stdout => "stdout.txt",
+            .stderr => "stderr.txt",
+            .meta => "meta.json",
+        };
+    }
+
+    fn label(kind: SavedOutputKind) []const u8 {
+        return switch (kind) {
+            .output => "output",
+            .stdout => "stdout",
+            .stderr => "stderr",
+            .meta => "meta",
+        };
+    }
+};
+
 const LineMap = struct {
     cell: ?notebook.Cell = null,
     cell_line: usize = 0,
@@ -156,6 +181,36 @@ pub const Runner = struct {
 
         if (saved_count == 0) {
             try cli_io.write(self.io, "No saved outputs found. Run a cell with --save-outputs first.\n");
+        }
+    }
+
+    pub fn showOutput(self: *Runner, nb: notebook.Notebook, cell_id: []const u8, kind: SavedOutputKind) !void {
+        const cell = nb.findCell(cell_id) orelse {
+            try cli_io.printErr(self.gpa, self.io, "cell not found: {s}\n", .{cell_id});
+            return error.CellNotFound;
+        };
+
+        const output_dir = try std.fmt.allocPrint(self.gpa, "{s}.outputs", .{nb.path});
+        defer self.gpa.free(output_dir);
+
+        const stem = try cellOutputStem(self.gpa, cell);
+        defer self.gpa.free(stem);
+
+        const path = try std.fmt.allocPrint(self.gpa, "{s}/{s}.{s}", .{ output_dir, stem, kind.suffix() });
+        defer self.gpa.free(path);
+
+        const data = Io.Dir.cwd().readFileAlloc(self.io, path, self.gpa, .limited(OutputLimit)) catch |err| switch (err) {
+            error.FileNotFound => {
+                try cli_io.printErr(self.gpa, self.io, "saved {s} not found for cell {s}: {s}\n", .{ kind.label(), cell.displayName(), path });
+                return error.OutputNotFound;
+            },
+            else => |e| return e,
+        };
+        defer self.gpa.free(data);
+
+        try cli_io.write(self.io, data);
+        if (data.len > 0 and !std.mem.endsWith(u8, data, "\n")) {
+            try cli_io.write(self.io, "\n");
         }
     }
 

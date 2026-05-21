@@ -13,6 +13,7 @@ const usage =
     \\  zig-lab check <notebook.ziglab>
     \\  zig-lab list <notebook.ziglab>
     \\  zig-lab outputs <notebook.ziglab>
+    \\  zig-lab show-output <notebook.ziglab> --cell <cell-id> [--output|--stdout|--stderr|--meta]
     \\  zig-lab export <notebook.ziglab> [--out <file.zig>]
     \\
     \\Examples:
@@ -20,6 +21,7 @@ const usage =
     \\  zig-lab run examples/hello.ziglab --cell answer --save-outputs
     \\  zig-lab list examples/hello.ziglab
     \\  zig-lab outputs examples/hello.ziglab
+    \\  zig-lab show-output examples/hello.ziglab --cell answer
     \\  zig-lab export examples/hello.ziglab --out generated/hello.zig
     \\
 ;
@@ -44,6 +46,8 @@ pub fn main(init: std.process.Init) !void {
         cmdList(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "outputs")) {
         cmdOutputs(gpa, io, args[2..]) catch |err| try handleCommandError(err);
+    } else if (std.mem.eql(u8, command, "show-output")) {
+        cmdShowOutput(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "export")) {
         cmdExport(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else {
@@ -134,6 +138,53 @@ fn cmdOutputs(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
     try runner.listOutputs(nb);
 }
 
+fn cmdShowOutput(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
+    if (args.len < 1) {
+        try cli_io.writeErr(io, usage);
+        std.process.exit(2);
+    }
+
+    const path = args[0];
+    var selected_cell: ?[]const u8 = null;
+    var kind: runner_mod.SavedOutputKind = .output;
+
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--cell")) {
+            i += 1;
+            if (i >= args.len) {
+                try cli_io.printErr(gpa, io, "missing value after --cell\n", .{});
+                std.process.exit(2);
+            }
+            selected_cell = args[i];
+        } else if (std.mem.eql(u8, args[i], "--output")) {
+            kind = .output;
+        } else if (std.mem.eql(u8, args[i], "--stdout")) {
+            kind = .stdout;
+        } else if (std.mem.eql(u8, args[i], "--stderr")) {
+            kind = .stderr;
+        } else if (std.mem.eql(u8, args[i], "--meta")) {
+            kind = .meta;
+        } else {
+            try cli_io.printErr(gpa, io, "unknown option: {s}\n", .{args[i]});
+            std.process.exit(2);
+        }
+    }
+
+    const cell_id = selected_cell orelse {
+        try cli_io.printErr(gpa, io, "missing required --cell <cell-id>\n", .{});
+        std.process.exit(2);
+    };
+
+    var nb = try notebook.load(gpa, io, path);
+    defer nb.deinit();
+
+    var runner: runner_mod.Runner = .{ .gpa = gpa, .io = io };
+    defer runner.deinit();
+
+    try runner.showOutput(nb, cell_id, kind);
+}
+
 fn cmdExport(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
     if (args.len < 1) {
         try cli_io.writeErr(io, usage);
@@ -180,6 +231,7 @@ fn handleCommandError(err: anyerror) anyerror!void {
         error.DependencyNotDeclaration,
         error.DependencyCycle,
         error.InvalidNotebook,
+        error.OutputNotFound,
         => std.process.exit(1),
         else => return err,
     }

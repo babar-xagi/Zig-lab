@@ -277,6 +277,13 @@ List saved outputs:
 zig-lab outputs examples/hello.ziglab
 ```
 
+Show saved output:
+
+```powershell
+zig-lab show-output examples/hello.ziglab --cell answer
+zig-lab show-output examples/hello.ziglab --cell answer --meta
+```
+
 Check a notebook without running side effects:
 
 ```powershell
