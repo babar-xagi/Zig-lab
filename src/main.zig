@@ -4,11 +4,13 @@ const Io = std.Io;
 const cli_io = @import("cli_io.zig");
 const notebook = @import("notebook.zig");
 const runner_mod = @import("runner.zig");
+const tui = @import("tui.zig");
 
 const usage =
     \\Zig-lab
     \\
     \\Usage:
+    \\  zig-lab tui <notebook.ziglab>
     \\  zig-lab run <notebook.ziglab> [--cell <cell-id>] [--save-outputs]
     \\  zig-lab check <notebook.ziglab>
     \\  zig-lab list <notebook.ziglab>
@@ -38,7 +40,9 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const command = args[1];
-    if (std.mem.eql(u8, command, "run")) {
+    if (std.mem.eql(u8, command, "tui")) {
+        cmdTui(gpa, io, args[0], args[2..]) catch |err| try handleCommandError(err);
+    } else if (std.mem.eql(u8, command, "run")) {
         cmdRun(gpa, io, args[2..]) catch |err| try handleCommandError(err);
     } else if (std.mem.eql(u8, command, "check")) {
         cmdCheck(gpa, io, args[2..]) catch |err| try handleCommandError(err);
@@ -55,6 +59,14 @@ pub fn main(init: std.process.Init) !void {
         try cli_io.writeErr(io, usage);
         std.process.exit(2);
     }
+}
+
+fn cmdTui(gpa: std.mem.Allocator, io: Io, self_exe: []const u8, args: []const []const u8) !void {
+    if (args.len != 1) {
+        try cli_io.writeErr(io, usage);
+        std.process.exit(2);
+    }
+    try tui.open(gpa, io, self_exe, args[0]);
 }
 
 fn cmdRun(gpa: std.mem.Allocator, io: Io, args: []const []const u8) !void {
