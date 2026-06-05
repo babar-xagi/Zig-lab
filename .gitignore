@@ -1,0 +1,14 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+
+# Generated execution workspace (Phase 2)
+temp/*
+!temp/.gitkeep
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.obj
+*.exe
+*.pdb

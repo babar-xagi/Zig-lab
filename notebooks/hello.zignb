@@ -1,0 +1,35 @@
+{
+  "format": "zignb",
+  "format_version": 1,
+  "name": "hello",
+  "cells": [
+    {
+      "id": "cell-1",
+      "type": "markdown",
+      "source": "# Hello, ZNotebook\n\nWelcome to **ZNotebook** — a cell-based interactive IDE for [Zig](https://ziglang.org/) 0.16.\n\nThis example notebook uses the `.zignb` file format.\n\n### Quick tips\n- **Shift + Enter** — run the active cell\n- **Save** — writes `notebooks/hello.zignb`\n- Run the code cell below to see live output",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-2",
+      "type": "markdown",
+      "source": "## ZNotebook features\n\n| Feature | Status |\n|---------|--------|\n| Zig HTTP server | Ready |\n| Monaco UI | Ready |\n| Save / load `.zignb` | Ready |\n| `notebook.zig` helpers (Zig 0.16) | Ready |\n| Run cells (`/api/run`) | Ready |",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-3",
+      "type": "code",
+      "source": "const std = @import(\"std\");\n\nstd.debug.print(\"Hello from hello.zignb!\\n\", .{});",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-4",
+      "type": "markdown",
+      "source": "## Rich output preview (Phase 0 library)\n\nOnce cells run, you can use `notebook.zig` helpers:\n\n```zig\nconst nb = @import(\"notebook\");\nnb.printHtml(\"<strong>Tables & plots</strong> from Zig!\");\n```\n\nSee `doc/getting_started.md` for the full guide.",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

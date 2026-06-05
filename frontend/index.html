@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZNotebook - High Performance Zig Notebook IDE</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Monaco Editor Loader -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.39.0/min/vs/loader.min.js"></script>
+    
+    <!-- Markdown Parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Stylesheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Glow Elements for Glassmorphic Background -->
+    <div class="glow-bg">
+        <div class="glow-sphere glow-purple"></div>
+        <div class="glow-sphere glow-cyan"></div>
+        <div class="glow-sphere glow-orange"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <i class="fa-solid fa-microchip logo-icon"></i>
+                <span class="logo-text">ZNotebook</span>
+            </div>
+            
+            <div class="sidebar-section">
+                <button id="btn-new-notebook" class="btn btn-primary btn-block">
+                    <i class="fa-solid fa-plus"></i> New Notebook
+                </button>
+            </div>
+            
+            <div class="sidebar-section">
+                <h3>Saved Notebooks</h3>
+                <ul id="notebooks-list" class="notebooks-list">
+                    <!-- Loaded dynamically -->
+                    <li class="loading-item">Loading notebooks...</li>
+                </ul>
+            </div>
+            
+            <div class="sidebar-footer">
+                <div class="zig-version-tag">
+                    <i class="fa-solid fa-code-branch"></i> Zig 0.16.0
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="workspace">
+            <header class="workspace-header">
+                <div class="notebook-title-area">
+                    <input type="text" id="notebook-name" value="hello" placeholder="Untitled Notebook">
+                    <span class="save-status" id="save-status">Saved</span>
+                </div>
+                
+                <div class="toolbar-actions">
+                    <button id="btn-run-all" class="btn btn-secondary" title="Run All Cells">
+                        <i class="fa-solid fa-forward"></i> Run All
+                    </button>
+                    <button id="btn-restart" class="btn btn-secondary" title="Clear All Outputs & Reset">
+                        <i class="fa-solid fa-rotate-left"></i> Restart
+                    </button>
+                    <button id="btn-save" class="btn btn-accent" title="Save Notebook">
+                        <i class="fa-solid fa-floppy-disk"></i> Save
+                    </button>
+                    <div class="kernel-status" id="kernel-status">
+                        <span class="status-dot status-idle"></span>
+                        <span class="status-text">Idle</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Cells Container -->
+            <div class="notebook-body" id="cells-container">
+                <!-- Cells loaded dynamically -->
+            </div>
+
+            <!-- Add Cell Floating Menu -->
+            <div class="cell-inserter">
+                <button class="btn btn-dashed" id="btn-add-code-bottom">
+                    <i class="fa-solid fa-code"></i> Code Cell
+                </button>
+                <button class="btn btn-dashed" id="btn-add-markdown-bottom">
+                    <i class="fa-solid fa-paragraph"></i> Markdown Cell
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="app.js"></script>
+</body>
+</html>

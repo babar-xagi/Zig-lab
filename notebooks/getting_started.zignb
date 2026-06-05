@@ -1,0 +1,91 @@
+{
+  "format": "zignb",
+  "format_version": 1,
+  "name": "getting_started",
+  "cells": [
+    {
+      "id": "cell-1",
+      "type": "markdown",
+      "source": "# Welcome to ZNotebook: Interactive Zig Environment\n\nZNotebook brings the interactive, cell-by-cell execution model of Jupyter to the **Zig Programming Language**. It is designed to be highly responsive and lightweight by leveraging Zig's compilation speeds.\n\n### Notebook Controls & Shortcuts:\n- **Shift + Enter**: Run the active cell.\n- **Double Click** on a Markdown cell to edit it, and press **Shift+Enter** to render it.\n- **Add Cells**: Use the buttons at the bottom to insert new code/markdown cells.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-2",
+      "type": "code",
+      "source": "const std = @import(\"std\");\n\n// Let's print a greeting message!\nstd.debug.print(\"Greetings from Zig 0.16.0!\\n\", .{});\nstd.debug.print(\"ZNotebook compiled and ran this instantly!\\n\", .{});",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-3",
+      "type": "markdown",
+      "source": "## 1. Local Variables and State Preservation\n\nIn ZNotebook, cells compile sequentially from top to bottom. If you declare a variable in a previous cell, it is automatically available in subsequent cells. Let's declare some variables.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-4",
+      "type": "code",
+      "source": "var training_epoch: i32 = 1;\nvar base_learning_rate: f64 = 0.05;\n\nstd.debug.print(\"Variables initialized. Epoch: {}, Learning Rate: {d:.3}\\n\", .{training_epoch, base_learning_rate});",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-5",
+      "type": "markdown",
+      "source": "Now in the next cell, let's modify `training_epoch` and print it. Since they execute in the same main context, the compiler preserves the variable scope!",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-6",
+      "type": "code",
+      "source": "training_epoch += 1;\nbase_learning_rate *= 0.90; // Apply decay\n\nstd.debug.print(\"Updated state: Epoch: {}, Learning Rate: {d:.4}\\n\", .{training_epoch, base_learning_rate});",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-7",
+      "type": "markdown",
+      "source": "## 2. Dynamic HTML Output (DataFrames & Tables)\n\nYou can render styled HTML tables directly from Zig using the `notebook.zig` helper library. This is extremely useful for displaying structured datasets, metrics, and data frames.",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-8",
+      "type": "code",
+      "source": "const nb = @import(\"notebook.zig\");\n\nconst headers = [_][]const u8{ \"Epoch\", \"Training Loss\", \"Validation Loss\", \"Accuracy\" };\nconst rows = [_][_][]const u8{\n    [_][]const u8{ \"1\", \"0.852\", \"0.791\", \"68.2%\" },\n    [_][]const u8{ \"2\", \"0.624\", \"0.582\", \"75.4%\" },\n    [_][]const u8{ \"3\", \"0.481\", \"0.412\", \"81.9%\" },\n    [_][]const u8{ \"4\", \"0.334\", \"0.322\", \"88.6%\" },\n    [_][]const u8{ \"5\", \"0.210\", \"0.231\", \"94.2%\" },\n};\n\nnb.printTable(&headers, &rows);",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-9",
+      "type": "markdown",
+      "source": "## 3. High Performance Plotting (SVG Generation)\n\nWe can generate and render vector charts directly in the notebook output by printing SVGs. ZNotebook parses output images and renders them inline. Let's calculate some dataset metrics and plot the curve!",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-10",
+      "type": "code",
+      "source": "const x_values = [_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 };\nconst y_values = [_]f64{ 1.5, 3.8, 3.2, 5.9, 5.1, 7.2, 6.4, 9.5, 8.9, 11.2 };\n\n// Calculate mean value of Y\nvar sum_y: f64 = 0;\nfor (y_values) |val| {\n    sum_y += val;\n}\nconst mean_y = sum_y / @as(f64, @floatFromInt(y_values.len));\nstd.debug.print(\"Mean Y Value: {d:.3}\\n\", .{mean_y});\n\n// Render SVG Line Plot\ntry nb.plotLine(\"AI/ML Model Accuracy over Epochs\", &x_values, &y_values);",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-11",
+      "type": "markdown",
+      "source": "You can also plot a scatter chart. Try it out!",
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "id": "cell-12",
+      "type": "code",
+      "source": "try nb.plotScatter(\"Scatter Plot Representation\", &x_values, &y_values);",
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}
