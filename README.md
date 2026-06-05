@@ -4,6 +4,10 @@ ZNotebook is a web-based, cell-based interactive development environment (IDE) f
 
 The project is implemented in **pure Zig** (no Rust/Python runtime). A single `znotebook` binary serves the UI, manages `.zignb` notebooks, and executes cells via the Zig compiler.
 
+<img width="1917" height="853" alt="image" src="https://github.com/user-attachments/assets/9ec37e03-6645-411b-bace-47e36ec5b9cd" />
+
+
+
 ## Features
 
 - **Interactive Cell Execution**: Write Zig code, run it, see results instantly.
