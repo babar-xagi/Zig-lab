@@ -1,84 +1,59 @@
 # Zig Lab ⚡
 
-Zig Lab is a research-engineering repository for experiments around interactive Zig, developer tooling, WebAssembly, caching, compile-time specialization, incremental compilation, and systems-oriented notebook ideas.
+An experimental Jupyter kernel for Zig.
 
-## Research direction
+## Current Status
 
-The starting point is an earlier Zig notebook prototype that demonstrated:
+Zig Lab can currently:
 
-- persistent typed state
-- a fast evaluator for simple expressions
-- fallback to the real Zig compiler
-- synchronization of supported mutable values back into fast state
+- Register Zig as a Jupyter kernel
+- Receive Zig code from JupyterLab cells
+- Create a temporary `.zig` source file for each cell
+- Compile and execute the cell using `zig run`
+- Capture stdout and stderr
+- Display Zig compiler errors directly in Jupyter
 
-Next research areas:
+## Architecture
 
-- `comptime` specialization
-- incremental compilation
-- compiled-artifact caching
-- browser/WebAssembly execution
-- browser-side persistent caching
-- a Zig-native notebook experience
+JupyterLab sends the contents of a notebook cell to the custom Python kernel.
 
-## Repository layout
+The current execution flow is:
 
-```text
-zig-lab/
-├── README.md
-├── docs/
-│   ├── vision.md
-│   ├── architecture.md
-│   ├── research-method.md
-│   ├── roadmap.md
-│   ├── decisions/
-│   └── history/
-├── experiments/
-│   └── README.md
-├── benchmarks/
-│   └── README.md
-└── .gitignore
-```
+    JupyterLab
+        |
+        v
+    Zig Jupyter Kernel
+        |
+        v
+    Temporary cell.zig
+        |
+        v
+    zig run
+        |
+        v
+    stdout / stderr
+        |
+        v
+    JupyterLab
 
-## Experiment IDs
+## Current Limitation
 
-Use permanent IDs:
+Each cell is currently compiled and executed as an independent Zig program.
 
-```text
-EXP-001
-EXP-002
-EXP-003
-```
+State is not yet preserved between cells.
 
-Example:
+Persistent native Zig notebook state is a future goal.
 
-```text
-experiments/EXP-001-hybrid-execution-cache/
-```
+## Development Environment
 
-## Every experiment records
+Currently tested with:
 
-1. Question
-2. Hypothesis
-3. Baseline
-4. Environment
-5. Implementation
-6. Procedure
-7. Raw results
-8. Interpretation
-9. Result
-10. Limitations
-11. Next step
+- Zig 0.16.0
+- Python 3.14
+- JupyterLab 4
+- uv
+- Linux / WSL2
 
-## Research rules
+## Project Status
 
-- Measure before claiming performance improvements.
-- Preserve failed experiments.
-- One main question per experiment.
-- Prefer reproducible commands over screenshots alone.
-- Keep raw benchmark data.
-- Record Zig version and build mode.
-- Separate observations from interpretation.
-
-## Status
-
-🧪 Early research phase.
+Experimental and under active development.

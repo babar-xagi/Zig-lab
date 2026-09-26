@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "zig-jupyter-kernel",
+    "-f",
+    "{connection_file}"
+  ],
+  "display_name": "Zig 0.16.0",
+  "language": "zig",
+  "interrupt_mode": "signal"
+}

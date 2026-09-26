@@ -1,14 +1,18 @@
-# Zig build artifacts
-.zig-cache/
-zig-out/
-.idea
-# Generated execution workspace (Phase 2)
-temp/*
-!temp/.gitkeep
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
 
-# Editor / OS
-.DS_Store
-Thumbs.db
-*.obj
-*.exe
-*.pdb
+# Virtual environments
+.venv
+
+# IDE and editor settings
+.ide/
+.ipynb_checkpoints/
+# Jupyter Notebook checkpoints
+
+# VS Code settings
+.vscode/
