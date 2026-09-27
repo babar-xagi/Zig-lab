@@ -8,20 +8,23 @@ from ipykernel.kernelbase import Kernel
 from .session import ZigSession
 from .native_runtime import NativeRuntime
 from .natural_syntax import (
+    expression_identifiers,
+    parse_declaration,
+    parse_inspection,
     parse_update,
+    render_native_declaration_with_bindings,
     render_native_update,
-    transform_natural_source,
 )
 
 
 class ZigKernel(Kernel):
     implementation = "zig-jupyter-kernel"
-    implementation_version = "0.6.0"
+    implementation_version = "0.7.0"
 
     language = "zig"
     language_version = "0.16.0"
 
-    banner = "Zig Jupyter Kernel 0.6.0"
+    banner = "Zig Jupyter Kernel 0.7.0"
 
     language_info = {
         "name": "zig",
@@ -262,31 +265,109 @@ class ZigKernel(Kernel):
 
         return self._ok()
 
+    async def _native_variable_type(
+        self,
+        name: str,
+    ) -> str:
+        response = (
+            await self.native_runtime.command(
+                f"var-get {name}"
+            )
+        )
+
+        parts = response.split(
+            maxsplit=3
+        )
+
+        if (
+            len(parts) < 3
+            or parts[0] != "VAR"
+            or parts[1] != name
+        ):
+            raise RuntimeError(
+                "Unexpected native variable "
+                f"response: {response}"
+            )
+
+        native_type = parts[2]
+
+        if native_type == "MISSING":
+            raise RuntimeError(
+                "Persistent variable "
+                f"'{name}' does not exist."
+            )
+
+        type_map = {
+            "I64": "i64",
+            "F64": "f64",
+            "BOOL": "bool",
+        }
+
+        type_name = type_map.get(
+            native_type
+        )
+
+        if type_name is None:
+            raise RuntimeError(
+                "Unsupported native variable "
+                f"type: {native_type}"
+            )
+
+        return type_name
+
+
+    async def _resolve_bindings(
+        self,
+        names: tuple[str, ...],
+        *,
+        exclude: str | None = None,
+    ) -> dict[str, str]:
+        bindings: dict[str, str] = {}
+
+        for name in names:
+            if name == exclude:
+                continue
+
+            bindings[name] = (
+                await self._native_variable_type(
+                    name
+                )
+            )
+
+        return bindings
+
+
     async def _run_natural_source(
         self,
         source: str,
         silent: bool,
     ):
-        transformed = transform_natural_source(
+        declaration = parse_declaration(
             source
         )
 
         update = None
+        inspection = None
 
-        if transformed is None:
+        if declaration is None:
             update = parse_update(source)
 
             if update is None:
-                return None
+                inspection = parse_inspection(
+                    source
+                )
+
+                if inspection is None:
+                    return None
 
         try:
             if not self.native_runtime.running:
                 await self.native_runtime.start()
 
-            if update is not None:
+            if inspection is not None:
                 response = (
                     await self.native_runtime.command(
-                        f"var-get {update.name}"
+                        f"var-get {inspection}"
                     )
                 )
 
@@ -297,42 +378,81 @@ class ZigKernel(Kernel):
                 if (
                     len(parts) < 3
                     or parts[0] != "VAR"
-                    or parts[1] != update.name
+                    or parts[1] != inspection
                 ):
                     raise RuntimeError(
                         "Unexpected native variable "
                         f"response: {response}"
                     )
 
-                native_type = parts[2]
-
-                if native_type == "MISSING":
+                if parts[2] == "MISSING":
                     raise RuntimeError(
                         "Persistent variable "
-                        f"'{update.name}' does "
+                        f"'{inspection}' does "
                         "not exist."
                     )
 
-                type_map = {
-                    "I64": "i64",
-                    "F64": "f64",
-                    "BOOL": "bool",
-                }
+                if len(parts) < 4:
+                    raise RuntimeError(
+                        "Native variable value "
+                        "was missing."
+                    )
 
-                type_name = type_map.get(
-                    native_type
+                value = parts[3]
+
+                if not silent:
+                    self._send_stream(
+                        "stdout",
+                        value + "\n",
+                    )
+
+                return self._ok()
+
+            if declaration is not None:
+                references = (
+                    expression_identifiers(
+                        declaration.value_source
+                    )
                 )
 
-                if type_name is None:
-                    raise RuntimeError(
-                        "Unsupported native "
-                        f"type: {native_type}"
+                bindings = (
+                    await self._resolve_bindings(
+                        references
                     )
+                )
+
+                transformed = (
+                    render_native_declaration_with_bindings(
+                        declaration,
+                        bindings,
+                    )
+                )
+
+            else:
+                update_type = (
+                    await self._native_variable_type(
+                        update.name
+                    )
+                )
+
+                references = (
+                    expression_identifiers(
+                        update.value_source
+                    )
+                )
+
+                bindings = (
+                    await self._resolve_bindings(
+                        references,
+                        exclude=update.name,
+                    )
+                )
 
                 transformed = (
                     render_native_update(
                         update,
-                        type_name,
+                        update_type,
+                        bindings,
                     )
                 )
 
