@@ -6,16 +6,17 @@ from pathlib import Path
 from ipykernel.kernelbase import Kernel
 
 from .session import ZigSession
+from .native_runtime import NativeRuntime
 
 
 class ZigKernel(Kernel):
     implementation = "zig-jupyter-kernel"
-    implementation_version = "0.2.0"
+    implementation_version = "0.3.0"
 
     language = "zig"
     language_version = "0.16.0"
 
-    banner = "Zig Jupyter Kernel 0.2.0"
+    banner = "Zig Jupyter Kernel 0.3.0"
 
     language_info = {
         "name": "zig",
@@ -28,6 +29,7 @@ class ZigKernel(Kernel):
 
         # This object lives for as long as this kernel process lives.
         self.zig_session = ZigSession()
+        self.native_runtime = NativeRuntime()
 
     def _send_stream(self, name: str, text: str) -> None:
         self.send_response(
@@ -314,6 +316,95 @@ class ZigKernel(Kernel):
                         "stdout",
                         "No persistent declarations stored.\n",
                     )
+
+            return self._ok()
+
+        if command == "//%native-start":
+            try:
+                message = await self.native_runtime.start()
+            except RuntimeError as exc:
+                message = str(exc)
+
+                if not silent:
+                    self._send_stream(
+                        "stderr",
+                        message + "\n",
+                    )
+
+                return self._error(
+                    "NativeRuntimeError",
+                    message,
+                )
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    message + "\n",
+                )
+
+            return self._ok()
+
+        if command == "//%native-status":
+            if self.native_runtime.running:
+                message = (
+                    "Native Zig runtime running "
+                    f"(pid={self.native_runtime.pid})."
+                )
+            else:
+                message = (
+                    "Native Zig runtime is not running."
+                )
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    message + "\n",
+                )
+
+            return self._ok()
+
+        native_commands = {
+            "//%native-ping": "ping",
+            "//%native-inc": "inc",
+            "//%native-get": "get",
+            "//%native-reset": "reset",
+        }
+
+        if command in native_commands:
+            try:
+                response = await self.native_runtime.command(
+                    native_commands[command]
+                )
+            except RuntimeError as exc:
+                message = str(exc)
+
+                if not silent:
+                    self._send_stream(
+                        "stderr",
+                        message + "\n",
+                    )
+
+                return self._error(
+                    "NativeRuntimeError",
+                    message,
+                )
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    response + "\n",
+                )
+
+            return self._ok()
+
+        if command == "//%native-stop":
+            message = await self.native_runtime.stop()
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    message + "\n",
+                )
 
             return self._ok()
 
