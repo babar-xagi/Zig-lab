@@ -2,19 +2,23 @@ import asyncio
 import shutil
 import tempfile
 from pathlib import Path
+from textwrap import indent
 
 
 class NativeRuntime:
     """
-    Controls one long-lived Zig runtime process.
+    Controls one long-lived Zig process.
 
-    The Zig process remains alive between commands, so native
-    runtime state can survive across Jupyter cell executions.
+    The runtime owns persistent native state.
+
+    New Zig notebook cells can be compiled as shared libraries
+    and dynamically loaded into that existing process.
     """
 
     def __init__(self) -> None:
         self.process: asyncio.subprocess.Process | None = None
         self._temp_dir: Path | None = None
+        self._cell_index = 0
 
     @property
     def running(self) -> bool:
@@ -28,12 +32,13 @@ class NativeRuntime:
         if not self.running:
             return None
 
+        assert self.process is not None
         return self.process.pid
 
     async def start(self) -> str:
         if self.running:
             return (
-                f"Native Zig runtime already running "
+                "Native Zig runtime already running "
                 f"(pid={self.pid})."
             )
 
@@ -135,9 +140,10 @@ class NativeRuntime:
 
         self.process = process
         self._temp_dir = temp_dir
+        self._cell_index = 0
 
         return (
-            f"Native Zig runtime started "
+            "Native Zig runtime started "
             f"(pid={process.pid})."
         )
 
@@ -183,6 +189,99 @@ class NativeRuntime:
             errors="replace",
         ).rstrip("\r\n")
 
+    async def compile_and_run_cell(
+        self,
+        body: str,
+    ) -> str:
+        if not self.running:
+            raise RuntimeError(
+                "Native Zig runtime is not running. "
+                "Run //%native-start first."
+            )
+
+        if not body.strip():
+            raise RuntimeError(
+                "Native cell is empty."
+            )
+
+        zig = shutil.which("zig")
+
+        if zig is None:
+            raise RuntimeError(
+                "Zig compiler was not found in PATH."
+            )
+
+        if self._temp_dir is None:
+            raise RuntimeError(
+                "Native runtime temporary directory "
+                "is unavailable."
+            )
+
+        self._cell_index += 1
+
+        cell_id = self._cell_index
+
+        source_file = (
+            self._temp_dir
+            / f"cell_{cell_id:04d}.zig"
+        )
+
+        library_file = (
+            self._temp_dir
+            / f"libcell_{cell_id:04d}.so"
+        )
+
+        wrapped_source = (
+            "const State = extern struct {\n"
+            "    counter: i64,\n"
+            "};\n\n"
+            "export fn ziglab_cell(state: *State) void {\n"
+            + indent(body.strip(), "    ")
+            + "\n}\n"
+        )
+
+        source_file.write_text(
+            wrapped_source,
+            encoding="utf-8",
+        )
+
+        compile_process = (
+            await asyncio.create_subprocess_exec(
+                zig,
+                "build-lib",
+                str(source_file),
+                "-dynamic",
+                f"-femit-bin={library_file}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        )
+
+        stdout_bytes, stderr_bytes = (
+            await compile_process.communicate()
+        )
+
+        stdout = stdout_bytes.decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        stderr = stderr_bytes.decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        if compile_process.returncode != 0:
+            raise RuntimeError(
+                "Native Zig cell compilation failed.\n"
+                + stdout
+                + stderr
+            )
+
+        return await self.command(
+            f"load {library_file}"
+        )
+
     async def stop(self) -> str:
         if not self.running:
             self._cleanup()
@@ -212,7 +311,7 @@ class NativeRuntime:
         self._cleanup()
 
         return (
-            f"Native Zig runtime stopped "
+            "Native Zig runtime stopped "
             f"(pid={pid}, response={response})."
         )
 
@@ -224,3 +323,4 @@ class NativeRuntime:
             )
 
         self._temp_dir = None
+        self._cell_index = 0

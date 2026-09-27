@@ -11,12 +11,12 @@ from .native_runtime import NativeRuntime
 
 class ZigKernel(Kernel):
     implementation = "zig-jupyter-kernel"
-    implementation_version = "0.3.0"
+    implementation_version = "0.4.0"
 
     language = "zig"
     language_version = "0.16.0"
 
-    banner = "Zig Jupyter Kernel 0.3.0"
+    banner = "Zig Jupyter Kernel 0.4.0"
 
     language_info = {
         "name": "zig",
@@ -359,6 +359,35 @@ class ZigKernel(Kernel):
                 self._send_stream(
                     "stdout",
                     message + "\n",
+                )
+
+            return self._ok()
+
+        if command == "//%native-cell":
+            try:
+                response = (
+                    await self.native_runtime.compile_and_run_cell(
+                        body
+                    )
+                )
+            except RuntimeError as exc:
+                message = str(exc)
+
+                if not silent:
+                    self._send_stream(
+                        "stderr",
+                        message + "\n",
+                    )
+
+                return self._error(
+                    "NativeCellError",
+                    message,
+                )
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    response + "\n",
                 )
 
             return self._ok()
