@@ -5,27 +5,16 @@ from pathlib import Path
 from textwrap import indent
 
 
-STATE_SOURCE = """const State = extern struct {
-    counter: i64,
-};"""
+CELL_PRELUDE = """const ziglab = @import("abi.zig");
+const State = ziglab.State;
+"""
 
 
 class NativeRuntime:
-    """
-    Controls one long-lived Zig process.
-
-    Native runtime state lives in the long-running Zig process.
-
-    Persistent Zig declarations are stored as source and included
-    when future notebook cells are compiled as shared libraries.
-    """
-
     def __init__(self) -> None:
         self.process: asyncio.subprocess.Process | None = None
         self._temp_dir: Path | None = None
         self._cell_index = 0
-
-        # Source-level declarations that future native cells can use.
         self._declarations: list[str] = []
 
     @property
@@ -53,6 +42,10 @@ class NativeRuntime:
     def clear_declarations(self) -> None:
         self._declarations.clear()
 
+    @property
+    def _abi_source(self) -> Path:
+        return Path(__file__).with_name("abi.zig")
+
     async def start(self) -> str:
         if self.running:
             return (
@@ -71,9 +64,16 @@ class NativeRuntime:
             Path(__file__).with_name("runtime.zig")
         )
 
+        abi_source = self._abi_source
+
         if not runtime_source.exists():
             raise RuntimeError(
                 f"Runtime source not found: {runtime_source}"
+            )
+
+        if not abi_source.exists():
+            raise RuntimeError(
+                f"ABI source not found: {abi_source}"
             )
 
         temp_dir = Path(
@@ -105,21 +105,24 @@ class NativeRuntime:
                 ignore_errors=True,
             )
 
-            stdout = stdout_bytes.decode(
-                "utf-8",
-                errors="replace",
-            )
-
-            stderr = stderr_bytes.decode(
-                "utf-8",
-                errors="replace",
-            )
-
             raise RuntimeError(
                 "Failed to compile native Zig runtime.\n"
-                + stdout
-                + stderr
+                + stdout_bytes.decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                + stderr_bytes.decode(
+                    "utf-8",
+                    errors="replace",
+                )
             )
+
+        # Dynamic notebook cells are compiled inside this directory.
+        # They need their own local copy of abi.zig.
+        shutil.copy2(
+            abi_source,
+            temp_dir / "abi.zig",
+        )
 
         process = await asyncio.create_subprocess_exec(
             str(binary),
@@ -135,9 +138,9 @@ class NativeRuntime:
                 "Native runtime stdout pipe unavailable."
             )
 
-        ready_bytes = await process.stdout.readline()
-
-        ready = ready_bytes.decode(
+        ready = (
+            await process.stdout.readline()
+        ).decode(
             "utf-8",
             errors="replace",
         ).strip()
@@ -193,16 +196,16 @@ class NativeRuntime:
 
         await self.process.stdin.drain()
 
-        response_bytes = (
+        response = (
             await self.process.stdout.readline()
         )
 
-        if not response_bytes:
+        if not response:
             raise RuntimeError(
                 "Native Zig runtime exited unexpectedly."
             )
 
-        return response_bytes.decode(
+        return response.decode(
             "utf-8",
             errors="replace",
         ).rstrip("\r\n")
@@ -220,8 +223,7 @@ class NativeRuntime:
 
         if "ziglab_cell" in candidate:
             raise RuntimeError(
-                "The name 'ziglab_cell' is reserved "
-                "for Zig Lab."
+                "The name 'ziglab_cell' is reserved."
             )
 
         zig = shutil.which("zig")
@@ -231,19 +233,15 @@ class NativeRuntime:
                 "Zig compiler was not found in PATH."
             )
 
-        declarations = list(self._declarations)
-        declarations.append(candidate)
+        declarations = [
+            *self._declarations,
+            candidate,
+        ]
 
-        declaration_source = "\n\n".join(
-            declarations
-        )
-
-        # Generate a tiny shared library to validate that the
-        # accumulated declarations can at least be compiled together.
         validation_source = (
-            STATE_SOURCE
-            + "\n\n"
-            + declaration_source
+            CELL_PRELUDE
+            + "\n"
+            + "\n\n".join(declarations)
             + "\n\n"
             + "export fn ziglab_cell(state: *State) void {\n"
             + "    _ = state;\n"
@@ -255,6 +253,11 @@ class NativeRuntime:
         ) as temp_dir:
 
             temp_path = Path(temp_dir)
+
+            shutil.copy2(
+                self._abi_source,
+                temp_path / "abi.zig",
+            )
 
             source_file = (
                 temp_path / "declaration.zig"
@@ -285,21 +288,17 @@ class NativeRuntime:
                 await process.communicate()
             )
 
-        stdout = stdout_bytes.decode(
-            "utf-8",
-            errors="replace",
-        )
-
-        stderr = stderr_bytes.decode(
-            "utf-8",
-            errors="replace",
-        )
-
         if process.returncode != 0:
             raise RuntimeError(
                 "Native Zig declaration compilation failed.\n"
-                + stdout
-                + stderr
+                + stdout_bytes.decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                + stderr_bytes.decode(
+                    "utf-8",
+                    errors="replace",
+                )
             )
 
         self._declarations.append(candidate)
@@ -314,7 +313,7 @@ class NativeRuntime:
         body: str,
     ) -> str:
         parts = [
-            STATE_SOURCE,
+            CELL_PRELUDE,
         ]
 
         declarations = self.declarations_source()
@@ -322,13 +321,11 @@ class NativeRuntime:
         if declarations:
             parts.append(declarations)
 
-        cell_function = (
+        parts.append(
             "export fn ziglab_cell(state: *State) void {\n"
             + indent(body.strip(), "    ")
             + "\n}\n"
         )
-
-        parts.append(cell_function)
 
         return "\n\n".join(parts)
 
@@ -362,24 +359,18 @@ class NativeRuntime:
 
         self._cell_index += 1
 
-        cell_id = self._cell_index
-
         source_file = (
             self._temp_dir
-            / f"cell_{cell_id:04d}.zig"
+            / f"cell_{self._cell_index:04d}.zig"
         )
 
         library_file = (
             self._temp_dir
-            / f"libcell_{cell_id:04d}.so"
-        )
-
-        wrapped_source = self._render_native_cell(
-            body
+            / f"libcell_{self._cell_index:04d}.so"
         )
 
         source_file.write_text(
-            wrapped_source,
+            self._render_native_cell(body),
             encoding="utf-8",
         )
 
@@ -399,21 +390,17 @@ class NativeRuntime:
             await compile_process.communicate()
         )
 
-        stdout = stdout_bytes.decode(
-            "utf-8",
-            errors="replace",
-        )
-
-        stderr = stderr_bytes.decode(
-            "utf-8",
-            errors="replace",
-        )
-
         if compile_process.returncode != 0:
             raise RuntimeError(
                 "Native Zig cell compilation failed.\n"
-                + stdout
-                + stderr
+                + stdout_bytes.decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                + stderr_bytes.decode(
+                    "utf-8",
+                    errors="replace",
+                )
             )
 
         return await self.command(

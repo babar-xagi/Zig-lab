@@ -11,12 +11,12 @@ from .native_runtime import NativeRuntime
 
 class ZigKernel(Kernel):
     implementation = "zig-jupyter-kernel"
-    implementation_version = "0.5.0"
+    implementation_version = "0.6.0"
 
     language = "zig"
     language_version = "0.16.0"
 
-    banner = "Zig Jupyter Kernel 0.5.0"
+    banner = "Zig Jupyter Kernel 0.6.0"
 
     language_info = {
         "name": "zig",
@@ -461,11 +461,57 @@ class ZigKernel(Kernel):
 
             return self._ok()
 
+        if command.startswith("//%native-var "):
+            name = command[
+                len("//%native-var "):
+            ].strip()
+
+            if not name:
+                message = "Variable name is required."
+
+                if not silent:
+                    self._send_stream(
+                        "stderr",
+                        message + "\n",
+                    )
+
+                return self._error(
+                    "NativeVariableError",
+                    message,
+                )
+
+            try:
+                response = await self.native_runtime.command(
+                    f"var-get {name}"
+                )
+            except RuntimeError as exc:
+                message = str(exc)
+
+                if not silent:
+                    self._send_stream(
+                        "stderr",
+                        message + "\n",
+                    )
+
+                return self._error(
+                    "NativeVariableError",
+                    message,
+                )
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    response + "\n",
+                )
+
+            return self._ok()
+
         native_commands = {
             "//%native-ping": "ping",
             "//%native-inc": "inc",
             "//%native-get": "get",
             "//%native-reset": "reset",
+            "//%native-vars": "vars",
         }
 
         if command in native_commands:

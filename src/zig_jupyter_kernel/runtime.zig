@@ -1,8 +1,7 @@
 const std = @import("std");
+const abi = @import("abi.zig");
 
-const State = extern struct {
-    counter: i64,
-};
+const State = abi.State;
 
 const CellFn = *const fn (*State) callconv(.c) void;
 
@@ -23,9 +22,7 @@ pub fn main(init: std.process.Init) !void {
     const stdin = &stdin_file.interface;
     const stdout = &stdout_file.interface;
 
-    var state = State{
-        .counter = 0,
-    };
+    var state = std.mem.zeroes(State);
 
     try stdout.writeAll("READY\n");
     try stdout.flush();
@@ -41,25 +38,134 @@ pub fn main(init: std.process.Init) !void {
             try stdout.writeAll("PONG\n");
 
         } else if (std.mem.eql(u8, line, "inc")) {
-            state.counter += 1;
+            const old = abi.getI64(
+                &state,
+                "counter",
+            ) orelse 0;
+
+            _ = abi.setI64(
+                &state,
+                "counter",
+                old + 1,
+            );
 
             try stdout.print(
                 "COUNTER {d}\n",
-                .{state.counter},
+                .{old + 1},
             );
 
         } else if (std.mem.eql(u8, line, "get")) {
+            const value = abi.getI64(
+                &state,
+                "counter",
+            ) orelse 0;
+
             try stdout.print(
                 "COUNTER {d}\n",
-                .{state.counter},
+                .{value},
             );
 
         } else if (std.mem.eql(u8, line, "reset")) {
-            state.counter = 0;
+            abi.clear(&state);
 
-            try stdout.writeAll("COUNTER 0\n");
+            try stdout.writeAll(
+                "COUNTER 0\n",
+            );
 
-        } else if (std.mem.startsWith(u8, line, "load ")) {
+        } else if (std.mem.eql(u8, line, "vars")) {
+            try stdout.writeAll("VARS");
+
+            for (state.slots[0..]) |*slot| {
+                if (slot.tag == abi.tag_empty) {
+                    continue;
+                }
+
+                const name_len: usize = @intCast(
+                    slot.name_len
+                );
+
+                try stdout.print(
+                    " {s}:{s}",
+                    .{
+                        slot.name[0..name_len],
+                        abi.tagName(slot.tag),
+                    },
+                );
+            }
+
+            try stdout.writeAll("\n");
+
+        } else if (
+            std.mem.startsWith(
+                u8,
+                line,
+                "var-get ",
+            )
+        ) {
+            const name = std.mem.trim(
+                u8,
+                line["var-get ".len..],
+                " \t\r\n",
+            );
+
+            const slot = abi.find(
+                &state,
+                name,
+            ) orelse {
+                try stdout.print(
+                    "VAR {s} MISSING\n",
+                    .{name},
+                );
+
+                try stdout.flush();
+                continue;
+            };
+
+            if (slot.tag == abi.tag_i64) {
+                const value: i64 = @bitCast(
+                    slot.bits
+                );
+
+                try stdout.print(
+                    "VAR {s} I64 {d}\n",
+                    .{ name, value },
+                );
+
+            } else if (slot.tag == abi.tag_f64) {
+                const value: f64 = @bitCast(
+                    slot.bits
+                );
+
+                try stdout.print(
+                    "VAR {s} F64 {d}\n",
+                    .{ name, value },
+                );
+
+            } else if (slot.tag == abi.tag_bool) {
+                const value = slot.bits != 0;
+
+                try stdout.print(
+                    "VAR {s} BOOL {s}\n",
+                    .{
+                        name,
+                        if (value) "true" else "false",
+                    },
+                );
+
+            } else {
+                try stdout.print(
+                    "VAR {s} UNKNOWN\n",
+                    .{name},
+                );
+            }
+
+        } else if (
+            std.mem.startsWith(
+                u8,
+                line,
+                "load ",
+            )
+        ) {
             const path = std.mem.trim(
                 u8,
                 line["load ".len..],
@@ -70,18 +176,23 @@ pub fn main(init: std.process.Init) !void {
                 try stdout.writeAll(
                     "ERROR missing library path\n",
                 );
+
                 try stdout.flush();
                 continue;
             }
 
-            var lib = std.DynLib.open(path) catch |err| {
+            var lib = std.DynLib.open(
+                path
+            ) catch |err| {
                 try stdout.print(
                     "ERROR load {s}\n",
                     .{@errorName(err)},
                 );
+
                 try stdout.flush();
                 continue;
             };
+
             defer lib.close();
 
             const run_cell = lib.lookup(
@@ -91,20 +202,27 @@ pub fn main(init: std.process.Init) !void {
                 try stdout.writeAll(
                     "ERROR symbol ziglab_cell not found\n",
                 );
+
                 try stdout.flush();
                 continue;
             };
 
             run_cell(&state);
 
+            const counter = abi.getI64(
+                &state,
+                "counter",
+            ) orelse 0;
+
             try stdout.print(
                 "CELL OK COUNTER {d}\n",
-                .{state.counter},
+                .{counter},
             );
 
         } else if (std.mem.eql(u8, line, "quit")) {
             try stdout.writeAll("BYE\n");
             try stdout.flush();
+
             break;
 
         } else if (line.len == 0) {
