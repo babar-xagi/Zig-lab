@@ -16,3 +16,8 @@ wheels/
 
 # VS Code settings
 .vscode/
+
+# Native build artifacts
+*.so
+*.dylib
+*.dll
