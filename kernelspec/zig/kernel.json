@@ -4,7 +4,7 @@
     "-f",
     "{connection_file}"
   ],
-  "display_name": "Zig 0.16.0",
+  "display_name": "ZigLab (Zig 0.16)",
   "language": "zig",
   "interrupt_mode": "signal"
 }

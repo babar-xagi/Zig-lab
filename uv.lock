@@ -1435,15 +1435,17 @@ wheels = [
 
 [[package]]
 name = "zig-jupyter-kernel"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "ipykernel" },
+    { name = "jupyter-client" },
     { name = "jupyterlab" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "ipykernel", specifier = ">=7.3.0" },
+    { name = "jupyter-client", specifier = ">=8.10.0" },
     { name = "jupyterlab", specifier = ">=4.6.4" },
 ]
