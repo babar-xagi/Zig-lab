@@ -11,12 +11,12 @@ from .native_runtime import NativeRuntime
 
 class ZigKernel(Kernel):
     implementation = "zig-jupyter-kernel"
-    implementation_version = "0.4.0"
+    implementation_version = "0.5.0"
 
     language = "zig"
     language_version = "0.16.0"
 
-    banner = "Zig Jupyter Kernel 0.4.0"
+    banner = "Zig Jupyter Kernel 0.5.0"
 
     language_info = {
         "name": "zig",
@@ -354,6 +354,75 @@ class ZigKernel(Kernel):
                 message = (
                     "Native Zig runtime is not running."
                 )
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    message + "\n",
+                )
+
+            return self._ok()
+
+        if command == "//%native-persist":
+            try:
+                message = (
+                    await self.native_runtime.persist_declaration(
+                        body
+                    )
+                )
+            except RuntimeError as exc:
+                message = str(exc)
+
+                if not silent:
+                    self._send_stream(
+                        "stderr",
+                        message + "\n",
+                    )
+
+                return self._error(
+                    "NativePersistError",
+                    message,
+                )
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    message + "\n",
+                )
+
+            return self._ok()
+
+        if command == "//%native-show":
+            source = (
+                self.native_runtime.declarations_source()
+            )
+
+            if source:
+                message = source
+            else:
+                message = (
+                    "No native Zig declarations stored."
+                )
+
+            if not silent:
+                self._send_stream(
+                    "stdout",
+                    message + "\n",
+                )
+
+            return self._ok()
+
+        if command == "//%native-clear":
+            count = (
+                self.native_runtime.declaration_count
+            )
+
+            self.native_runtime.clear_declarations()
+
+            message = (
+                f"Cleared {count} native Zig "
+                "declaration cell(s)."
+            )
 
             if not silent:
                 self._send_stream(

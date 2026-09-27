@@ -5,20 +5,28 @@ from pathlib import Path
 from textwrap import indent
 
 
+STATE_SOURCE = """const State = extern struct {
+    counter: i64,
+};"""
+
+
 class NativeRuntime:
     """
     Controls one long-lived Zig process.
 
-    The runtime owns persistent native state.
+    Native runtime state lives in the long-running Zig process.
 
-    New Zig notebook cells can be compiled as shared libraries
-    and dynamically loaded into that existing process.
+    Persistent Zig declarations are stored as source and included
+    when future notebook cells are compiled as shared libraries.
     """
 
     def __init__(self) -> None:
         self.process: asyncio.subprocess.Process | None = None
         self._temp_dir: Path | None = None
         self._cell_index = 0
+
+        # Source-level declarations that future native cells can use.
+        self._declarations: list[str] = []
 
     @property
     def running(self) -> bool:
@@ -34,6 +42,16 @@ class NativeRuntime:
 
         assert self.process is not None
         return self.process.pid
+
+    @property
+    def declaration_count(self) -> int:
+        return len(self._declarations)
+
+    def declarations_source(self) -> str:
+        return "\n\n".join(self._declarations)
+
+    def clear_declarations(self) -> None:
+        self._declarations.clear()
 
     async def start(self) -> str:
         if self.running:
@@ -189,6 +207,131 @@ class NativeRuntime:
             errors="replace",
         ).rstrip("\r\n")
 
+    async def persist_declaration(
+        self,
+        source: str,
+    ) -> str:
+        candidate = source.strip()
+
+        if not candidate:
+            raise RuntimeError(
+                "Native declaration cell is empty."
+            )
+
+        if "ziglab_cell" in candidate:
+            raise RuntimeError(
+                "The name 'ziglab_cell' is reserved "
+                "for Zig Lab."
+            )
+
+        zig = shutil.which("zig")
+
+        if zig is None:
+            raise RuntimeError(
+                "Zig compiler was not found in PATH."
+            )
+
+        declarations = list(self._declarations)
+        declarations.append(candidate)
+
+        declaration_source = "\n\n".join(
+            declarations
+        )
+
+        # Generate a tiny shared library to validate that the
+        # accumulated declarations can at least be compiled together.
+        validation_source = (
+            STATE_SOURCE
+            + "\n\n"
+            + declaration_source
+            + "\n\n"
+            + "export fn ziglab_cell(state: *State) void {\n"
+            + "    _ = state;\n"
+            + "}\n"
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="zig-lab-declaration-"
+        ) as temp_dir:
+
+            temp_path = Path(temp_dir)
+
+            source_file = (
+                temp_path / "declaration.zig"
+            )
+
+            library_file = (
+                temp_path / "libdeclaration.so"
+            )
+
+            source_file.write_text(
+                validation_source,
+                encoding="utf-8",
+            )
+
+            process = (
+                await asyncio.create_subprocess_exec(
+                    zig,
+                    "build-lib",
+                    str(source_file),
+                    "-dynamic",
+                    f"-femit-bin={library_file}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            )
+
+            stdout_bytes, stderr_bytes = (
+                await process.communicate()
+            )
+
+        stdout = stdout_bytes.decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        stderr = stderr_bytes.decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        if process.returncode != 0:
+            raise RuntimeError(
+                "Native Zig declaration compilation failed.\n"
+                + stdout
+                + stderr
+            )
+
+        self._declarations.append(candidate)
+
+        return (
+            "Stored native Zig declaration cell "
+            f"#{self.declaration_count}."
+        )
+
+    def _render_native_cell(
+        self,
+        body: str,
+    ) -> str:
+        parts = [
+            STATE_SOURCE,
+        ]
+
+        declarations = self.declarations_source()
+
+        if declarations:
+            parts.append(declarations)
+
+        cell_function = (
+            "export fn ziglab_cell(state: *State) void {\n"
+            + indent(body.strip(), "    ")
+            + "\n}\n"
+        )
+
+        parts.append(cell_function)
+
+        return "\n\n".join(parts)
+
     async def compile_and_run_cell(
         self,
         body: str,
@@ -231,13 +374,8 @@ class NativeRuntime:
             / f"libcell_{cell_id:04d}.so"
         )
 
-        wrapped_source = (
-            "const State = extern struct {\n"
-            "    counter: i64,\n"
-            "};\n\n"
-            "export fn ziglab_cell(state: *State) void {\n"
-            + indent(body.strip(), "    ")
-            + "\n}\n"
+        wrapped_source = self._render_native_cell(
+            body
         )
 
         source_file.write_text(
