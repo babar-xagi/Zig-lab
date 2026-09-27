@@ -88,6 +88,7 @@ class NativeRuntime:
             await asyncio.create_subprocess_exec(
                 zig,
                 "build-exe",
+                "-fllvm",
                 str(runtime_source),
                 f"-femit-bin={binary}",
                 stdout=asyncio.subprocess.PIPE,
@@ -201,9 +202,32 @@ class NativeRuntime:
         )
 
         if not response:
-            raise RuntimeError(
-                "Native Zig runtime exited unexpectedly."
+            stderr_text = ""
+
+            if self.process.stderr is not None:
+                stderr_bytes = (
+                    await self.process.stderr.read()
+                )
+
+                stderr_text = stderr_bytes.decode(
+                    "utf-8",
+                    errors="replace",
+                )
+
+            returncode = await self.process.wait()
+
+            message = (
+                "Native Zig runtime exited unexpectedly "
+                f"(code={returncode})."
             )
+
+            if stderr_text:
+                message += (
+                    "\n\n--- Zig runtime stderr ---\n"
+                    + stderr_text
+                )
+
+            raise RuntimeError(message)
 
         return response.decode(
             "utf-8",
@@ -276,6 +300,7 @@ class NativeRuntime:
                 await asyncio.create_subprocess_exec(
                     zig,
                     "build-lib",
+                "-fllvm",
                     str(source_file),
                     "-dynamic",
                     f"-femit-bin={library_file}",
@@ -378,6 +403,7 @@ class NativeRuntime:
             await asyncio.create_subprocess_exec(
                 zig,
                 "build-lib",
+                "-fllvm",
                 str(source_file),
                 "-dynamic",
                 f"-femit-bin={library_file}",

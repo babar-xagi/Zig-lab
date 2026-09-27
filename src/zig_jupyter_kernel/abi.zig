@@ -1,63 +1,54 @@
-const std = @import("std");
-
-pub const max_vars: usize = 64;
 pub const max_name_len: usize = 48;
 
-pub const tag_empty: u8 = 0;
-pub const tag_i64: u8 = 1;
-pub const tag_f64: u8 = 2;
-pub const tag_bool: u8 = 3;
 
-pub const Slot = extern struct {
-    name: [max_name_len]u8,
-    name_len: u8,
-    tag: u8,
-    _padding: [6]u8,
-    bits: u64,
+pub const Context = extern struct {
+    userdata: *anyopaque,
+
+    set_i64_fn: *const fn (
+        *anyopaque,
+        [*:0]const u8,
+        i64,
+    ) callconv(.c) u8,
+
+    get_i64_fn: *const fn (
+        *anyopaque,
+        [*:0]const u8,
+        *i64,
+    ) callconv(.c) u8,
+
+    set_f64_fn: *const fn (
+        *anyopaque,
+        [*:0]const u8,
+        f64,
+    ) callconv(.c) u8,
+
+    get_f64_fn: *const fn (
+        *anyopaque,
+        [*:0]const u8,
+        *f64,
+    ) callconv(.c) u8,
+
+    set_bool_fn: *const fn (
+        *anyopaque,
+        [*:0]const u8,
+        u8,
+    ) callconv(.c) u8,
+
+    get_bool_fn: *const fn (
+        *anyopaque,
+        [*:0]const u8,
+        *u8,
+    ) callconv(.c) u8,
 };
 
-pub const State = extern struct {
-    slots: [max_vars]Slot,
-};
 
-pub fn clear(state: *State) void {
-    state.* = std.mem.zeroes(State);
-}
+pub const State = Context;
 
-fn slotName(slot: *const Slot) []const u8 {
-    const len: usize = @intCast(slot.name_len);
-    return slot.name[0..len];
-}
 
-pub fn find(
-    state: *State,
+fn makeName(
     name: []const u8,
-) ?*Slot {
-    for (state.slots[0..]) |*slot| {
-        if (slot.tag == tag_empty) {
-            continue;
-        }
-
-        if (std.mem.eql(
-            u8,
-            slotName(slot),
-            name,
-        )) {
-            return slot;
-        }
-    }
-
-    return null;
-}
-
-fn findOrCreate(
-    state: *State,
-    name: []const u8,
-) ?*Slot {
-    if (find(state, name)) |slot| {
-        return slot;
-    }
-
+    buffer: *[max_name_len + 1]u8,
+) ?[*:0]const u8 {
     if (
         name.len == 0 or
         name.len > max_name_len
@@ -65,144 +56,163 @@ fn findOrCreate(
         return null;
     }
 
-    for (state.slots[0..]) |*slot| {
-        if (slot.tag != tag_empty) {
-            continue;
-        }
+    @memset(buffer[0..], 0);
 
-        @memset(slot.name[0..], 0);
+    @memcpy(
+        buffer[0..name.len],
+        name,
+    );
 
-        @memcpy(
-            slot.name[0..name.len],
-            name,
-        );
+    buffer[name.len] = 0;
 
-        slot.name_len = @intCast(name.len);
-        slot.bits = 0;
+    const z_name = buffer[0..name.len :0];
 
-        return slot;
-    }
-
-    return null;
+    return z_name.ptr;
 }
+
 
 pub fn setI64(
     state: *State,
     name: []const u8,
     value: i64,
 ) bool {
-    const slot = findOrCreate(
-        state,
+    var buffer: [max_name_len + 1]u8 =
+        undefined;
+
+    const z_name = makeName(
         name,
+        &buffer,
     ) orelse return false;
 
-    slot.tag = tag_i64;
-    slot.bits = @bitCast(value);
-
-    return true;
+    return state.set_i64_fn(
+        state.userdata,
+        z_name,
+        value,
+    ) != 0;
 }
+
 
 pub fn getI64(
     state: *State,
     name: []const u8,
 ) ?i64 {
-    const slot = find(
-        state,
+    var buffer: [max_name_len + 1]u8 =
+        undefined;
+
+    const z_name = makeName(
         name,
+        &buffer,
     ) orelse return null;
 
-    if (slot.tag != tag_i64) {
+    var value: i64 = undefined;
+
+    const found = state.get_i64_fn(
+        state.userdata,
+        z_name,
+        &value,
+    );
+
+    if (found == 0) {
         return null;
     }
 
-    const value: i64 = @bitCast(slot.bits);
-
     return value;
 }
+
 
 pub fn setF64(
     state: *State,
     name: []const u8,
     value: f64,
 ) bool {
-    const slot = findOrCreate(
-        state,
+    var buffer: [max_name_len + 1]u8 =
+        undefined;
+
+    const z_name = makeName(
         name,
+        &buffer,
     ) orelse return false;
 
-    slot.tag = tag_f64;
-    slot.bits = @bitCast(value);
-
-    return true;
+    return state.set_f64_fn(
+        state.userdata,
+        z_name,
+        value,
+    ) != 0;
 }
+
 
 pub fn getF64(
     state: *State,
     name: []const u8,
 ) ?f64 {
-    const slot = find(
-        state,
+    var buffer: [max_name_len + 1]u8 =
+        undefined;
+
+    const z_name = makeName(
         name,
+        &buffer,
     ) orelse return null;
 
-    if (slot.tag != tag_f64) {
+    var value: f64 = undefined;
+
+    const found = state.get_f64_fn(
+        state.userdata,
+        z_name,
+        &value,
+    );
+
+    if (found == 0) {
         return null;
     }
 
-    const value: f64 = @bitCast(slot.bits);
-
     return value;
 }
+
 
 pub fn setBool(
     state: *State,
     name: []const u8,
     value: bool,
 ) bool {
-    const slot = findOrCreate(
-        state,
+    var buffer: [max_name_len + 1]u8 =
+        undefined;
+
+    const z_name = makeName(
         name,
+        &buffer,
     ) orelse return false;
 
-    slot.tag = tag_bool;
-    slot.bits = if (value) 1 else 0;
-
-    return true;
+    return state.set_bool_fn(
+        state.userdata,
+        z_name,
+        if (value) 1 else 0,
+    ) != 0;
 }
+
 
 pub fn getBool(
     state: *State,
     name: []const u8,
 ) ?bool {
-    const slot = find(
-        state,
+    var buffer: [max_name_len + 1]u8 =
+        undefined;
+
+    const z_name = makeName(
         name,
+        &buffer,
     ) orelse return null;
 
-    if (slot.tag != tag_bool) {
+    var value: u8 = 0;
+
+    const found = state.get_bool_fn(
+        state.userdata,
+        z_name,
+        &value,
+    );
+
+    if (found == 0) {
         return null;
     }
 
-    return slot.bits != 0;
-}
-
-pub fn count(state: *State) usize {
-    var total: usize = 0;
-
-    for (state.slots[0..]) |*slot| {
-        if (slot.tag != tag_empty) {
-            total += 1;
-        }
-    }
-
-    return total;
-}
-
-pub fn tagName(tag: u8) []const u8 {
-    return switch (tag) {
-        tag_i64 => "i64",
-        tag_f64 => "f64",
-        tag_bool => "bool",
-        else => "unknown",
-    };
+    return value != 0;
 }
