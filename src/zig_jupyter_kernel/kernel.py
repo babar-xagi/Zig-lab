@@ -7,6 +7,11 @@ from ipykernel.kernelbase import Kernel
 
 from .session import ZigSession
 from .native_runtime import NativeRuntime
+from .natural_syntax import (
+    parse_update,
+    render_native_update,
+    transform_natural_source,
+)
 
 
 class ZigKernel(Kernel):
@@ -257,6 +262,104 @@ class ZigKernel(Kernel):
 
         return self._ok()
 
+    async def _run_natural_source(
+        self,
+        source: str,
+        silent: bool,
+    ):
+        transformed = transform_natural_source(
+            source
+        )
+
+        update = None
+
+        if transformed is None:
+            update = parse_update(source)
+
+            if update is None:
+                return None
+
+        try:
+            if not self.native_runtime.running:
+                await self.native_runtime.start()
+
+            if update is not None:
+                response = (
+                    await self.native_runtime.command(
+                        f"var-get {update.name}"
+                    )
+                )
+
+                parts = response.split(
+                    maxsplit=3
+                )
+
+                if (
+                    len(parts) < 3
+                    or parts[0] != "VAR"
+                    or parts[1] != update.name
+                ):
+                    raise RuntimeError(
+                        "Unexpected native variable "
+                        f"response: {response}"
+                    )
+
+                native_type = parts[2]
+
+                if native_type == "MISSING":
+                    raise RuntimeError(
+                        "Persistent variable "
+                        f"'{update.name}' does "
+                        "not exist."
+                    )
+
+                type_map = {
+                    "I64": "i64",
+                    "F64": "f64",
+                    "BOOL": "bool",
+                }
+
+                type_name = type_map.get(
+                    native_type
+                )
+
+                if type_name is None:
+                    raise RuntimeError(
+                        "Unsupported native "
+                        f"type: {native_type}"
+                    )
+
+                transformed = (
+                    render_native_update(
+                        update,
+                        type_name,
+                    )
+                )
+
+            await (
+                self.native_runtime
+                .compile_and_run_cell(
+                    transformed
+                )
+            )
+
+        except (RuntimeError, ValueError) as exc:
+            message = str(exc)
+
+            if not silent:
+                self._send_stream(
+                    "stderr",
+                    message + "\n",
+                )
+
+            return self._error(
+                "NaturalZigError",
+                message,
+            )
+
+        return self._ok()
+
+
     async def do_execute(
         self,
         code,
@@ -278,6 +381,16 @@ class ZigKernel(Kernel):
         command = lines[0].strip()
 
         body = "\n".join(lines[1:])
+
+        natural_result = (
+            await self._run_natural_source(
+                stripped,
+                silent,
+            )
+        )
+
+        if natural_result is not None:
+            return natural_result
 
         if command == "//%persist":
             return await self._persist(
