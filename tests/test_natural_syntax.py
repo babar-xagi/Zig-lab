@@ -9,6 +9,7 @@ from zig_jupyter_kernel.natural_syntax import (
     parse_update,
     render_native_declaration_with_bindings,
     render_native_update,
+    split_natural_statements,
     transform_natural_source,
 )
 
@@ -294,6 +295,74 @@ fn hello() void {
     def test_bool_literal_not_inspection(self):
         self.assertIsNone(
             parse_inspection("true")
+        )
+
+
+
+    def test_split_two_declarations(self):
+        source = """
+var bonus: i64 = 10;
+var total: i64 = age + bonus;
+"""
+
+        self.assertEqual(
+            split_natural_statements(
+                source
+            ),
+            (
+                "var bonus: i64 = 10;",
+                (
+                    "var total: i64 = "
+                    "age + bonus;"
+                ),
+            ),
+        )
+
+    def test_split_declaration_and_inspection(self):
+        source = """
+var score: f64 = 98.5;
+score
+"""
+
+        self.assertEqual(
+            split_natural_statements(
+                source
+            ),
+            (
+                "var score: f64 = 98.5;",
+                "score",
+            ),
+        )
+
+    def test_split_update_and_inspection(self):
+        source = """
+age += 1;
+age
+"""
+
+        self.assertEqual(
+            split_natural_statements(
+                source
+            ),
+            (
+                "age += 1;",
+                "age",
+            ),
+        )
+
+    def test_normal_multiline_zig_not_claimed(self):
+        source = """
+const std = @import("std");
+
+pub fn main() void {
+    std.debug.print("hello\\n", .{});
+}
+"""
+
+        self.assertIsNone(
+            split_natural_statements(
+                source
+            )
         )
 
 

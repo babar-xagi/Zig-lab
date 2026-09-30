@@ -14,6 +14,7 @@ from .natural_syntax import (
     parse_update,
     render_native_declaration_with_bindings,
     render_native_update,
+    split_natural_statements,
 )
 
 
@@ -337,7 +338,7 @@ class ZigKernel(Kernel):
         return bindings
 
 
-    async def _run_natural_source(
+    async def _run_natural_statement(
         self,
         source: str,
         silent: bool,
@@ -478,6 +479,42 @@ class ZigKernel(Kernel):
             )
 
         return self._ok()
+
+
+    async def _run_natural_source(
+        self,
+        source: str,
+        silent: bool,
+    ):
+        statements = (
+            split_natural_statements(
+                source
+            )
+        )
+
+        if statements is None:
+            return None
+
+        if not statements:
+            return self._ok()
+
+        result = self._ok()
+
+        for statement in statements:
+            result = (
+                await self._run_natural_statement(
+                    statement,
+                    silent,
+                )
+            )
+
+            if result is None:
+                return None
+
+            if result.get("status") != "ok":
+                return result
+
+        return result
 
 
     async def do_execute(

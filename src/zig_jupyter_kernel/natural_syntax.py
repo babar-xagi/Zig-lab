@@ -407,6 +407,97 @@ def render_native_update(
     )
 
 
+def split_natural_statements(
+    source: str,
+) -> tuple[str, ...] | None:
+    """
+    Split a cell containing only ZigLab natural
+    statements.
+
+    Returns None when the cell should be handled
+    as ordinary Zig source.
+    """
+
+    source = source.strip()
+
+    if not source:
+        return ()
+
+    statements: list[str] = []
+    current: list[str] = []
+
+    for character in source:
+        current.append(character)
+
+        if character == ";":
+            statement = "".join(
+                current
+            ).strip()
+
+            if statement:
+                statements.append(
+                    statement
+                )
+
+            current = []
+
+    tail = "".join(current).strip()
+
+    if tail:
+        tail_lines = [
+            line.strip()
+            for line in tail.splitlines()
+            if line.strip()
+        ]
+
+        # Bare variable inspections do not need
+        # semicolons, so allow multiple inspection
+        # lines at the end of a natural cell.
+        if (
+            tail_lines
+            and all(
+                parse_inspection(line)
+                is not None
+                for line in tail_lines
+            )
+        ):
+            statements.extend(
+                tail_lines
+            )
+        else:
+            statements.append(
+                tail
+            )
+
+    if not statements:
+        return ()
+
+    for statement in statements:
+        if (
+            parse_declaration(statement)
+            is not None
+        ):
+            continue
+
+        if (
+            parse_update(statement)
+            is not None
+        ):
+            continue
+
+        if (
+            parse_inspection(statement)
+            is not None
+        ):
+            continue
+
+        # This isn't a fully-natural ZigLab cell.
+        # Let the normal Zig compiler handle it.
+        return None
+
+    return tuple(statements)
+
+
 def transform_natural_source(
     source: str,
 ) -> str | None:
