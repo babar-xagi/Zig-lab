@@ -8,6 +8,7 @@ dependencies = [
     "ipykernel>=7.3.0",
     "jupyter-client>=8.10.0",
     "jupyterlab>=4.6.4",
+    "ziglang==0.16.0",
 ]
 
 [project.scripts]

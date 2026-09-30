@@ -4,6 +4,8 @@ import tempfile
 from pathlib import Path
 from textwrap import indent
 
+from .toolchain import zig_command
+
 
 CELL_PRELUDE = """const ziglab = @import("abi.zig");
 const State = ziglab.State;
@@ -53,12 +55,7 @@ class NativeRuntime:
                 f"(pid={self.pid})."
             )
 
-        zig = shutil.which("zig")
-
-        if zig is None:
-            raise RuntimeError(
-                "Zig compiler was not found in PATH."
-            )
+        zig = zig_command()
 
         runtime_source = (
             Path(__file__).with_name("runtime.zig")
@@ -86,7 +83,7 @@ class NativeRuntime:
 
         compile_process = (
             await asyncio.create_subprocess_exec(
-                zig,
+                *zig,
                 "build-exe",
                 "-fllvm",
                 str(runtime_source),
@@ -250,12 +247,7 @@ class NativeRuntime:
                 "The name 'ziglab_cell' is reserved."
             )
 
-        zig = shutil.which("zig")
-
-        if zig is None:
-            raise RuntimeError(
-                "Zig compiler was not found in PATH."
-            )
+        zig = zig_command()
 
         declarations = [
             *self._declarations,
@@ -298,7 +290,7 @@ class NativeRuntime:
 
             process = (
                 await asyncio.create_subprocess_exec(
-                    zig,
+                    *zig,
                     "build-lib",
                 "-fllvm",
                     str(source_file),
@@ -369,12 +361,7 @@ class NativeRuntime:
                 "Native cell is empty."
             )
 
-        zig = shutil.which("zig")
-
-        if zig is None:
-            raise RuntimeError(
-                "Zig compiler was not found in PATH."
-            )
+        zig = zig_command()
 
         if self._temp_dir is None:
             raise RuntimeError(
@@ -401,7 +388,7 @@ class NativeRuntime:
 
         compile_process = (
             await asyncio.create_subprocess_exec(
-                zig,
+                *zig,
                 "build-lib",
                 "-fllvm",
                 str(source_file),

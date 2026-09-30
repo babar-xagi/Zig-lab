@@ -12,6 +12,13 @@ from pathlib import Path
 
 from jupyter_client.kernelspec import KernelSpecManager
 
+from .toolchain import (
+    EXPECTED_ZIG_VERSION,
+    zig_command,
+    zig_origin,
+    zig_version,
+)
+
 
 KERNEL_NAME = "ziglab"
 DISPLAY_NAME = "ZigLab (Zig 0.16)"
@@ -102,16 +109,11 @@ def install_kernel() -> int:
     return 0
 
 
-def _check_llvm(
-    zig: str,
-) -> tuple[bool, str]:
+def _check_llvm() -> tuple[bool, str]:
     with tempfile.TemporaryDirectory(
         prefix="ziglab-doctor-"
     ) as temp_dir:
-        source = (
-            Path(temp_dir)
-            / "doctor.zig"
-        )
+        source = Path(temp_dir) / "doctor.zig"
 
         source.write_text(
             "pub fn main() void {}\n",
@@ -120,7 +122,7 @@ def _check_llvm(
 
         process = subprocess.run(
             [
-                zig,
+                *zig_command(),
                 "build-exe",
                 str(source),
                 "-fllvm",
@@ -135,107 +137,90 @@ def _check_llvm(
     if process.returncode == 0:
         return True, "LLVM backend available"
 
-    message = (
+    return (
+        False,
         process.stderr.strip()
         or process.stdout.strip()
-        or "LLVM compile check failed"
+        or "LLVM compile check failed",
     )
-
-    return False, message
 
 
 def doctor() -> int:
     print(
-        f"ZigLab Doctor "
-        f"{_package_version()}"
+        f"ZigLab Doctor {_package_version()}"
     )
     print("=" * 42)
 
     healthy = True
 
     print(
-        f"✓ Python {sys.version.split()[0]}"
+        f"✓ Python runtime "
+        f"{sys.version.split()[0]}"
     )
 
-    zig = shutil.which("zig")
+    try:
+        detected = zig_version()
+        origin = zig_origin()
 
-    if zig is None:
-        print("✗ Zig compiler not found")
-        healthy = False
-        zig_version = None
-    else:
-        process = subprocess.run(
-            [
-                zig,
-                "version",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
+        label = (
+            "Bundled Zig"
+            if origin == "bundled"
+            else "System Zig"
         )
 
-        zig_version = (
-            process.stdout.strip()
-        )
-
-        if process.returncode == 0:
+        if detected == EXPECTED_ZIG_VERSION:
             print(
-                f"✓ Zig {zig_version}"
-            )
-            print(
-                f"  {zig}"
+                f"✓ {label} {detected}"
             )
         else:
+            print("✗ Zig version mismatch")
             print(
-                "✗ Could not read Zig version"
+                f"  Expected: "
+                f"{EXPECTED_ZIG_VERSION}"
+            )
+            print(
+                f"  Detected: {detected}"
             )
             healthy = False
 
-    if zig is not None:
+        print(
+            "  " + " ".join(
+                zig_command()
+            )
+        )
+
+    except RuntimeError as exc:
+        print("✗ Zig compiler unavailable")
+        print(f"  {exc}")
+        healthy = False
+
+    if healthy:
         llvm_ok, llvm_message = (
-            _check_llvm(zig)
+            _check_llvm()
         )
 
         if llvm_ok:
-            print(
-                "✓ Zig LLVM backend"
-            )
+            print("✓ Zig LLVM backend")
         else:
-            print(
-                "✗ Zig LLVM backend"
-            )
-            print(
-                f"  {llvm_message}"
-            )
+            print("✗ Zig LLVM backend")
+            print(f"  {llvm_message}")
             healthy = False
 
     try:
         import ipykernel  # noqa: F401
-
-        print(
-            "✓ ipykernel available"
-        )
+        print("✓ ipykernel available")
     except ImportError:
-        print(
-            "✗ ipykernel missing"
-        )
+        print("✗ ipykernel missing")
         healthy = False
 
     try:
         import jupyterlab  # noqa: F401
-
-        print(
-            "✓ JupyterLab available"
-        )
+        print("✓ JupyterLab available")
     except ImportError:
-        print(
-            "✗ JupyterLab missing"
-        )
+        print("✗ JupyterLab missing")
         healthy = False
 
     manager = KernelSpecManager()
-
     specs = manager.get_all_specs()
 
     if KERNEL_NAME in specs:
@@ -251,30 +236,21 @@ def doctor() -> int:
         )
 
         if resource_dir:
-            print(
-                f"  {resource_dir}"
-            )
+            print(f"  {resource_dir}")
     else:
         print(
             "✗ ZigLab kernelspec not installed"
         )
-        print(
-            "  Run: ziglab install"
-        )
+        print("  Run: ziglab install")
         healthy = False
 
     print()
 
     if healthy:
-        print(
-            "ZigLab is ready ✓"
-        )
+        print("ZigLab is ready ✓")
         return 0
 
-    print(
-        "ZigLab needs attention ✗"
-    )
-
+    print("ZigLab needs attention ✗")
     return 1
 
 

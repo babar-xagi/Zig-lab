@@ -1,5 +1,4 @@
 import asyncio
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -7,6 +6,7 @@ from ipykernel.kernelbase import Kernel
 
 from .session import ZigSession
 from .native_runtime import NativeRuntime
+from .toolchain import zig_command
 from .natural_syntax import (
     expression_identifiers,
     parse_declaration,
@@ -73,10 +73,10 @@ class ZigKernel(Kernel):
         *,
         execute: bool,
     ):
-        zig = shutil.which("zig")
-
-        if zig is None:
-            return None, "", "Zig compiler was not found in PATH."
+        try:
+            zig = zig_command()
+        except RuntimeError as exc:
+            return None, "", str(exc)
 
         with tempfile.TemporaryDirectory(
             prefix="zig-jupyter-"
@@ -91,13 +91,13 @@ class ZigKernel(Kernel):
 
             if execute:
                 command = [
-                    zig,
+                    *zig,
                     "run",
                     str(source_file),
                 ]
             else:
                 command = [
-                    zig,
+                    *zig,
                     "build-exe",
                     str(source_file),
                     "-fno-emit-bin",
