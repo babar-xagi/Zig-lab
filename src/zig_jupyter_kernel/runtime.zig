@@ -1,5 +1,6 @@
 const std = @import("std");
 const abi = @import("abi.zig");
+const dynlib = @import("dynlib.zig");
 
 const max_vars: usize = 64;
 const max_name_len: usize = 48;
@@ -380,7 +381,7 @@ pub fn main(init: std.process.Init) !void {
     // Dynamic libraries never see Store directly.
     var store = std.mem.zeroes(Store);
 
-    // Small stable interface passed across the .so boundary.
+    // Small stable interface passed across the dynamic-library boundary.
     var context = abi.Context{
         .userdata = @ptrCast(&store),
 
@@ -566,8 +567,9 @@ pub fn main(init: std.process.Init) !void {
                 continue;
             }
 
-            var lib = std.DynLib.open(
-                path
+            var lib = dynlib.DynamicLibrary.open(
+                init.arena.allocator(),
+                path,
             ) catch |err| {
                 try stdout.print(
                     "ERROR load {s}\n",

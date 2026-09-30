@@ -5,6 +5,10 @@ from pathlib import Path
 from textwrap import indent
 
 from .toolchain import zig_command
+from .native_platform import (
+    dynamic_library_name,
+    runtime_executable_name,
+)
 
 
 CELL_PRELUDE = """const ziglab = @import("abi.zig");
@@ -48,6 +52,10 @@ class NativeRuntime:
     def _abi_source(self) -> Path:
         return Path(__file__).with_name("abi.zig")
 
+    @property
+    def _dynlib_source(self) -> Path:
+        return Path(__file__).with_name("dynlib.zig")
+
     async def start(self) -> str:
         if self.running:
             return (
@@ -79,7 +87,10 @@ class NativeRuntime:
             )
         )
 
-        binary = temp_dir / "zig-lab-runtime"
+        binary = (
+            temp_dir
+            / runtime_executable_name()
+        )
 
         compile_process = (
             await asyncio.create_subprocess_exec(
@@ -120,6 +131,11 @@ class NativeRuntime:
         shutil.copy2(
             abi_source,
             temp_dir / "abi.zig",
+        )
+
+        shutil.copy2(
+            self._dynlib_source,
+            temp_dir / "dynlib.zig",
         )
 
         process = await asyncio.create_subprocess_exec(
@@ -280,7 +296,10 @@ class NativeRuntime:
             )
 
             library_file = (
-                temp_path / "libdeclaration.so"
+                temp_path
+                / dynamic_library_name(
+                    "ziglab-declaration"
+                )
             )
 
             source_file.write_text(
@@ -378,7 +397,12 @@ class NativeRuntime:
 
         library_file = (
             self._temp_dir
-            / f"libcell_{self._cell_index:04d}.so"
+            / dynamic_library_name(
+                (
+                    "ziglab-cell-"
+                    f"{self._cell_index:04d}"
+                )
+            )
         )
 
         source_file.write_text(
